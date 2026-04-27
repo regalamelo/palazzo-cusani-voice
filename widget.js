@@ -12,48 +12,47 @@ btn.style.padding = "20px";
 btn.style.borderRadius = "50px";
 btn.style.background = "#000";
 btn.style.color = "#fff";
-btn.style.fontSize = "16px";
 
 document.body.appendChild(btn);
 
 btn.onclick = async () => {
-  btn.innerText = "Connessione...";
+  try {
+    btn.innerText = "Connessione...";
 
-  const tokenRes = await fetch("/api/session", { method: "POST" });
-  const data = await tokenRes.json();
+    pc = new RTCPeerConnection();
 
-  const clientSecret = data.client_secret.value;
+    const audio = document.createElement("audio");
+    audio.autoplay = true;
+    document.body.appendChild(audio);
 
-  pc = new RTCPeerConnection();
+    pc.ontrack = (event) => {
+      audio.srcObject = event.streams[0];
+    };
 
-  const audio = document.createElement("audio");
-  audio.autoplay = true;
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-  pc.ontrack = e => {
-    audio.srcObject = e.streams[0];
-  };
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
 
-  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    const sdpRes = await fetch("/api/session", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/sdp"
+      },
+      body: offer.sdp
+    });
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
+    const answer = await sdpRes.text();
 
-  const sdpRes = await fetch("https://api.openai.com/v1/realtime/calls", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${clientSecret}`,
-      "Content-Type": "application/sdp"
-    },
-    body: offer.sdp
-  });
+    await pc.setRemoteDescription({
+      type: "answer",
+      sdp: answer
+    });
 
-  const answer = await sdpRes.text();
-
-  await pc.setRemoteDescription({
-    type: "answer",
-    sdp: answer
-  });
-
-  btn.innerText = "🎙️ In ascolto...";
+    btn.innerText = "🎙️ In ascolto...";
+  } catch (e) {
+    console.error(e);
+    btn.innerText = "Errore";
+  }
 };
