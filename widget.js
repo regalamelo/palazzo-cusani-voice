@@ -31,7 +31,8 @@ btn.onclick = async () => {
 
     console.log("RISPOSTA API SESSION:", data);
 
-    const clientSecret = data.client_secret?.value || data.value;
+    // 👇 FIX DEFINITIVO (usa SOLO data.value)
+    const clientSecret = data.value;
 
     if (!clientSecret) {
       alert("Errore API session: " + JSON.stringify(data));
@@ -43,6 +44,7 @@ btn.onclick = async () => {
 
     const audio = document.createElement("audio");
     audio.autoplay = true;
+    audio.playsInline = true;
     document.body.appendChild(audio);
 
     pc.ontrack = (event) => {
@@ -52,12 +54,14 @@ btn.onclick = async () => {
     const dc = pc.createDataChannel("oai-events");
 
     dc.onopen = () => {
-      dc.send(JSON.stringify({
-        type: "response.create",
-        response: {
-          instructions: "Saluta l’utente in italiano con tono elegante e chiedi come puoi aiutarlo con Palazzo Cusani."
-        }
-      }));
+      setTimeout(() => {
+        dc.send(JSON.stringify({
+          type: "response.create",
+          response: {
+            instructions: "Sei l’assistente di Palazzo Cusani. Saluta l’utente in italiano in modo elegante e chiedi come puoi aiutare."
+          }
+        }));
+      }, 500);
     };
 
     stream = await navigator.mediaDevices.getUserMedia({
@@ -82,7 +86,7 @@ btn.onclick = async () => {
 
     if (!sdpRes.ok) {
       const errorText = await sdpRes.text();
-      alert("Errore connessione realtime: " + errorText);
+      alert("Errore realtime: " + errorText);
       btn.innerText = "Errore Realtime";
       return;
     }
@@ -97,7 +101,7 @@ btn.onclick = async () => {
     btn.innerText = "🎙️ In ascolto...";
   } catch (error) {
     console.error(error);
-    alert("Errore generale: " + error.message);
+    alert("Errore: " + error.message);
     btn.innerText = "Errore";
   }
 };
