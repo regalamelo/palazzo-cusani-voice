@@ -16,7 +16,7 @@ const SCRIPT_URL = document.currentScript?.src || window.location.href;
 const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
 const LEAD_URL = new URL("api/lead", BASE_URL).toString();
-const BUTTON_IMAGE_URL = new URL("adriana-voice.svg", BASE_URL).toString();
+const BUTTON_IMAGE_URL = new URL("adriana-voice.svg?v=2", BASE_URL).toString();
 
 const notes = [];
 const lead = {
@@ -308,9 +308,7 @@ function updateLeadFromText(text) {
   }
 
   const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  if (emailMatch) {
-    lead.email = emailMatch[0];
-  }
+  if (emailMatch) lead.email = emailMatch[0];
 
   const phoneMatch = text.match(/(?:\+?\d[\s.-]?){8,}/);
   if (phoneMatch) {
@@ -329,13 +327,12 @@ function updateLeadFromText(text) {
   const peopleMatch =
     text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i) ||
     text.match(/\b(?:per|siamo|saremo|in)\s+(\d{1,3})\b/i);
+
   if (peopleMatch) {
     lead.people = peopleMatch[1];
   } else if (!lead.people) {
     const spokenPeople = parsePeopleFromText(text);
-    if (spokenPeople) {
-      lead.people = String(spokenPeople);
-    }
+    if (spokenPeople) lead.people = String(spokenPeople);
   }
 
   if (normalized.includes("pranzo") || normalized.includes("a pranzo")) {
@@ -361,26 +358,15 @@ function updateLeadFromText(text) {
     lead.time = timeMatch[2] ? `${timeMatch[1]}:${timeMatch[2]}` : timeMatch[1];
 
     const hour = Number(timeMatch[1]);
-    if (!lead.meal && hour >= 11 && hour <= 16) {
-      lead.meal = "pranzo";
-    }
-
-    if (!lead.meal && hour >= 18 && hour <= 23) {
-      lead.meal = "cena";
-    }
+    if (!lead.meal && hour >= 11 && hour <= 16) lead.meal = "pranzo";
+    if (!lead.meal && hour >= 18 && hour <= 23) lead.meal = "cena";
   } else if (!lead.time) {
     const spokenTime = parseSpokenTime(text);
     if (spokenTime) {
       lead.time = spokenTime;
-
       const hour = Number(spokenTime.split(":")[0]);
-      if (!lead.meal && hour >= 11 && hour <= 16) {
-        lead.meal = "pranzo";
-      }
-
-      if (!lead.meal && hour >= 18 && hour <= 23) {
-        lead.meal = "cena";
-      }
+      if (!lead.meal && hour >= 11 && hour <= 16) lead.meal = "pranzo";
+      if (!lead.meal && hour >= 18 && hour <= 23) lead.meal = "cena";
     }
   }
 
@@ -435,18 +421,7 @@ function looksLikeNameAnswer(text) {
 
 function looksLikeSpokenPhone(text) {
   const normalized = text.toLowerCase();
-  const digitWords = [
-    "zero",
-    "uno",
-    "due",
-    "tre",
-    "quattro",
-    "cinque",
-    "sei",
-    "sette",
-    "otto",
-    "nove",
-  ];
+  const digitWords = ["zero", "uno", "due", "tre", "quattro", "cinque", "sei", "sette", "otto", "nove"];
   const wordCount = digitWords.reduce(
     (count, word) => count + (normalized.match(new RegExp(`\\b${word}\\b`, "g")) || []).length,
     0
@@ -486,6 +461,7 @@ function parsePeopleFromText(text) {
     diciannove: 19,
     venti: 20,
   };
+
   const words = Object.keys(numberWords).join("|");
   const match =
     normalized.match(new RegExp(`\\b(${words})\\s+(?:persone|ospiti|coperti)\\b`, "i")) ||
@@ -525,6 +501,7 @@ function parseSpokenTime(text) {
     ventitre: 23,
     ventitré: 23,
   };
+
   const words = Object.keys(numberWords).join("|");
   const match = normalized.match(new RegExp(`\\b(?:alle|ore)?\\s*(${words})\\b`, "i"));
 
@@ -542,9 +519,7 @@ function getPublicSummary() {
     lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
     lead.time ? `Ora: ${lead.time}` : "",
     lead.people ? `Persone: ${lead.people}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function getInternalSummary() {
@@ -568,14 +543,6 @@ function getInternalSummary() {
   ].join("\n");
 }
 
-function hasBookingDetails() {
-  return lead.intent === "prenotazione" && lead.day && lead.meal && lead.time && lead.name && lead.people;
-}
-
-function hasEventDetails() {
-  return lead.intent === "evento" && lead.occasion && lead.day && lead.name && lead.people;
-}
-
 function canShowContactButtons() {
   return lead.intent === "prenotazione" || lead.intent === "evento";
 }
@@ -593,9 +560,7 @@ function updateWhatsAppButton() {
 
 function openWhatsAppWithLatestMessage(event) {
   event.preventDefault();
-
   if (!canShowContactButtons()) return;
-
   window.open(buildWhatsAppUrl(), "_blank", "noopener");
 }
 
@@ -610,9 +575,7 @@ function buildWhatsAppUrl() {
     getWhatsappSummary(),
     "",
     "Resto in attesa di conferma o ricontatto. Grazie.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
 
   return `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(message)}`;
 }
@@ -625,9 +588,7 @@ function getWhatsappSummary() {
     fields,
     requestText ? "Richiesta raccolta:" : "",
     requestText,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function updateEmailButtons() {
@@ -651,27 +612,6 @@ function updateContactButtons() {
 
   if (lead.intent === "evento") {
     generalEmail.style.display = "block";
-  }
-}
-
-async function maybeSendLead() {
-  if (leadSent || !(hasBookingDetails() || hasEventDetails())) return;
-
-  leadSent = true;
-
-  try {
-    await fetch(LEAD_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        summary: getInternalSummary(),
-      }),
-    });
-  } catch (error) {
-    console.warn("Lead email not sent", error);
-    leadSent = false;
   }
 }
 
@@ -791,6 +731,7 @@ function askAssistantToGreet() {
   if (!eventsChannel || greeted || eventsChannel.readyState !== "open") return;
 
   greeted = true;
+
   try {
     eventsChannel.send(
       JSON.stringify({
@@ -816,9 +757,7 @@ function handleRealtimeEvent(message) {
   }
 
   const text = getEventText(event);
-  if (!text) {
-    return;
-  }
+  if (!text) return;
 
   rememberUserText(text);
 
