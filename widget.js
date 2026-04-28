@@ -3,11 +3,15 @@ let stream = null;
 let dc = null;
 let active = false;
 
+document.body.innerHTML = "";
+
 const style = document.createElement("style");
 style.innerHTML = `
   body {
     min-height: 100vh;
-    background: #ffffff;
+    background: #fff;
+    margin: 0;
+    font-family: Arial, sans-serif;
   }
 
   #voiceOrb {
@@ -20,8 +24,8 @@ style.innerHTML = `
     border-radius: 50%;
     border: none;
     cursor: pointer;
-    z-index: 9999;
     background: transparent;
+    z-index: 10;
   }
 
   #voiceOrb::before {
@@ -42,15 +46,15 @@ style.innerHTML = `
     animation: blobMove 2s ease-in-out infinite alternate, activePulse 1.4s ease-in-out infinite;
   }
 
-  #voiceStatus {
+  #status {
     position: fixed;
-    top: calc(50% + 135px);
+    top: calc(50% + 140px);
     left: 50%;
     transform: translateX(-50%);
-    font-family: Arial, sans-serif;
-    font-size: 13px;
-    color: #555;
-    z-index: 9999;
+    color: #444;
+    font-size: 14px;
+    text-align: center;
+    max-width: 90%;
   }
 
   @keyframes blobMove {
@@ -71,13 +75,15 @@ orb.id = "voiceOrb";
 document.body.appendChild(orb);
 
 const status = document.createElement("div");
-status.id = "voiceStatus";
+status.id = "status";
 status.innerText = "Tocca la bolla";
 document.body.appendChild(status);
 
 const audio = document.createElement("audio");
 audio.autoplay = true;
 audio.playsInline = true;
+audio.controls = false;
+audio.volume = 1;
 document.body.appendChild(audio);
 
 orb.onclick = async () => {
@@ -90,37 +96,40 @@ orb.onclick = async () => {
 
 async function startCall() {
   try {
-    status.innerText = "Connessione...";
+    status.innerText = "Creo sessione OpenAI...";
 
     const tokenResponse = await fetch("/api/session", { method: "POST" });
     const data = await tokenResponse.json();
 
-    const EPHEMERAL_KEY = data.value;
-
-    if (!EPHEMERAL_KEY) {
-      alert("Errore token: " + JSON.stringify(data));
+    if (!data.value) {
       status.innerText = "Errore token";
+      alert(JSON.stringify(data));
       return;
     }
 
+    const EPHEMERAL_KEY = data.value;
+
+    status.innerText = "Attivo microfono...";
+
     pc = new RTCPeerConnection();
 
+    pc.onconnectionstatechange = () => {
+      status.innerText = "Stato connessione: " + pc.connectionState;
+    };
+
     pc.ontrack = async (event) => {
+      status.innerText = "Audio ricevuto da OpenAI";
       audio.srcObject = event.streams[0];
-      await audio.play().catch(() => {});
+
+      try {
+        await audio.play();
+        status.innerText = "Sto parlando / ascoltando";
+      } catch (e) {
+        status.innerText = "Audio bloccato dal browser: clicca di nuovo la bolla";
+      }
     };
 
-    dc = pc.createDataChannel("oai-events");
-
-    dc.onopen = () => {
-      status.innerText = "Connesso. Parla ora.";
-      dc.send(JSON.stringify({
-        type: "response.create",
-        response: {
-          instructions: "Saluta subito l’utente in italiano. Di': Benvenuto a Palazzo Cusani, sono il tuo assistente vocale. Posso aiutarti con prenotazioni, orari, eventi e informazioni sul palazzo."
-        }
-      }));
-    };
+    pc.addTransceiver("audio", { direction: "recvonly" });
 
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -134,8 +143,41 @@ async function startCall() {
       pc.addTrack(track, stream);
     });
 
+    dc = pc.createDataChannel("oai-events");
+
+    dc.onopen = () => {
+      status.innerText = "Canale AI aperto. Invio richiesta voce...";
+
+      dc.send(JSON.stringify({
+        type: "response.create",
+        response: {
+          modalities: ["audio", "text"],
+          instructions: "Rispondi SOLO con audio. Saluta subito in italiano dicendo: Benvenuto a Palazzo Cusani, sono il tuo assistente vocale. Posso aiutarti con prenotazioni, orari, eventi e informazioni sul palazzo."
+        }
+      }));
+    };
+
+    dc.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      console.log("OPENAI EVENT:", msg);
+
+      if (msg.type === "error") {
+        status.innerText = "Errore OpenAI: " + msg.error.message;
+        alert("Errore OpenAI: " + msg.error.message);
+      }
+
+      if (msg.type === "response.done") {
+        if (msg.response && msg.response.status === "failed") {
+          status.innerText = "Risposta fallita";
+          alert(JSON.stringify(msg.response.status_details || msg.response));
+        }
+      }
+    };
+
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+
+    status.innerText = "Connessione WebRTC...";
 
     const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
       method: "POST",
@@ -147,8 +189,9 @@ async function startCall() {
     });
 
     if (!sdpResponse.ok) {
-      alert("Errore Realtime: " + await sdpResponse.text());
-      status.innerText = "Errore realtime";
+      const err = await sdpResponse.text();
+      status.innerText = "Errore Realtime";
+      alert(err);
       return;
     }
 
@@ -161,10 +204,11 @@ async function startCall() {
 
     active = true;
     orb.classList.add("listening");
-    status.innerText = "In ascolto";
+    status.innerText = "Connesso. Attendi la voce o parla tu.";
+
   } catch (error) {
+    status.innerText = "Errore: " + error.message;
     alert("Errore: " + error.message);
-    status.innerText = "Errore";
   }
 }
 
