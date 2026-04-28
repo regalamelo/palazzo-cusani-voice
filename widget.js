@@ -1,12 +1,11 @@
 let pc;
 let stream;
 let audio;
-let isActive = false;
-let leadSent = false;
-let callTranscriptSent = false;
-let silenceTimer;
 let eventsChannel;
+let silenceTimer;
+let isActive = false;
 let greeted = false;
+let callTranscriptSent = false;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -60,34 +59,21 @@ const actions = document.createElement("div");
 actions.className = "pc-voice-actions";
 widget.appendChild(actions);
 
-const whatsapp = document.createElement("a");
+const whatsapp = createAction("Invia richiesta su WhatsApp", "pc-voice-whatsapp");
 whatsapp.href = "#";
 whatsapp.target = "_blank";
 whatsapp.rel = "noopener";
-whatsapp.innerText = "Conferma su WhatsApp";
-whatsapp.className = "pc-voice-action pc-voice-whatsapp";
-whatsapp.style.display = "none";
 whatsapp.addEventListener("click", openWhatsAppWithLatestMessage);
 actions.appendChild(whatsapp);
 
-const generalEmail = document.createElement("a");
-generalEmail.href =
-  "mailto:" +
-  GENERAL_EMAIL +
-  "?subject=Richiesta%20informazioni%20Palazzo%20Cusani";
-generalEmail.innerText = GENERAL_EMAIL;
-generalEmail.className = "pc-voice-action pc-voice-email";
-generalEmail.style.display = "none";
+const generalEmail = createAction(GENERAL_EMAIL, "pc-voice-email");
 actions.appendChild(generalEmail);
 
-const parkingEmail = document.createElement("a");
+const parkingEmail = createAction(PARKING_EMAIL, "pc-voice-email");
 parkingEmail.href =
   "mailto:" +
   PARKING_EMAIL +
   "?subject=Richiesta%20parcheggio%20Palazzo%20Cusani";
-parkingEmail.innerText = PARKING_EMAIL;
-parkingEmail.className = "pc-voice-action pc-voice-email";
-parkingEmail.style.display = "none";
 actions.appendChild(parkingEmail);
 
 const style = document.createElement("style");
@@ -107,8 +93,8 @@ style.innerHTML = `
 
   .pc-voice-button {
     position: relative;
-    width: 220px;
-    height: 235px;
+    width: min(430px, calc(100vw - 24px));
+    height: min(455px, calc(100vw + 1px));
     padding: 0;
     border: 0;
     cursor: pointer;
@@ -120,8 +106,8 @@ style.innerHTML = `
     position: absolute;
     left: 50%;
     top: 0;
-    width: 215px;
-    height: 215px;
+    width: min(430px, calc(100vw - 24px));
+    height: min(430px, calc(100vw - 24px));
     transform: translateX(-50%);
     background-size: contain;
     background-position: center;
@@ -132,16 +118,16 @@ style.innerHTML = `
   .pc-voice-button-label {
     position: absolute;
     left: 50%;
-    bottom: 4px;
+    bottom: 8px;
     transform: translateX(-50%);
-    min-width: 126px;
-    padding: 6px 10px;
+    min-width: 150px;
+    padding: 8px 14px;
     color: #172033;
     background: rgba(255, 255, 255, 0.94);
     border: 1px solid rgba(23, 32, 51, 0.12);
     border-radius: 999px;
     box-shadow: 0 8px 22px rgba(23, 32, 51, 0.12);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     line-height: 1.15;
     text-align: center;
@@ -199,6 +185,14 @@ style.innerHTML = `
 `;
 document.head.appendChild(style);
 
+function createAction(text, className) {
+  const action = document.createElement("a");
+  action.innerText = text;
+  action.className = `pc-voice-action ${className}`;
+  action.style.display = "none";
+  return action;
+}
+
 function showStatus(message) {
   statusText.innerText = message;
   statusText.style.display = "block";
@@ -206,15 +200,6 @@ function showStatus(message) {
 
 function hideStatus() {
   statusText.style.display = "none";
-}
-
-function showGeneralEmail() {
-  updateEmailButtons();
-  generalEmail.style.display = "block";
-}
-
-function showParkingEmail() {
-  parkingEmail.style.display = "block";
 }
 
 function hideActionButtons() {
@@ -225,7 +210,6 @@ function hideActionButtons() {
 
 function resetLeadState() {
   notes.length = 0;
-  leadSent = false;
   callTranscriptSent = false;
 
   Object.assign(lead, {
@@ -287,7 +271,7 @@ function clearSilenceTimer() {
 }
 
 function rememberUserText(text) {
-  const cleaned = text.trim();
+  const cleaned = cleanText(text);
   if (!cleaned || notes.includes(cleaned)) return;
 
   notes.push(cleaned);
@@ -298,41 +282,39 @@ function rememberUserText(text) {
 
 function updateLeadFromText(text) {
   const normalized = text.toLowerCase();
+  const hasEventIntent = textLooksLikeEventRequest(text);
+  const hasBookingIntent = textLooksLikeBookingRequest(text);
 
-  if (textLooksLikeBookingRequest(text)) {
+  if (hasEventIntent && !normalized.includes("tavolo")) {
+    lead.intent = "evento";
+  } else if (hasBookingIntent) {
     lead.intent = "prenotazione";
-  } else if (textLooksLikeEventRequest(text) && lead.intent !== "prenotazione") {
+  } else if (hasEventIntent) {
     lead.intent = "evento";
   } else if (!lead.intent && normalized.length > 8) {
     lead.intent = "informazioni";
   }
 
   const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  if (emailMatch) lead.email = emailMatch[0];
+  if (emailMatch) {
+    lead.email = emailMatch[0];
+  }
 
   const phoneMatch = text.match(/(?:\+?\d[\s.-]?){8,}/);
   if (phoneMatch) {
     lead.phone = phoneMatch[0].trim();
-  } else if (!lead.phone && looksLikeSpokenPhone(text)) {
-    lead.phone = cleanPhoneValue(text);
   }
 
-  const nameMatch = text.match(/\b(?:mi chiamo|sono|nome e)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i);
-  if (nameMatch?.[1]) {
-    lead.name = cleanCapturedValue(nameMatch[1]);
+  const capturedName = getNameFromText(text);
+  if (capturedName) {
+    lead.name = capturedName;
   } else if (!lead.name && looksLikeNameAnswer(text)) {
     lead.name = cleanCapturedValue(text);
   }
 
-  const peopleMatch =
-    text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i) ||
-    text.match(/\b(?:per|siamo|saremo|in)\s+(\d{1,3})\b/i);
-
-  if (peopleMatch) {
-    lead.people = peopleMatch[1];
-  } else if (!lead.people) {
-    const spokenPeople = parsePeopleFromText(text);
-    if (spokenPeople) lead.people = String(spokenPeople);
+  const people = getPeopleFromText(text);
+  if (people) {
+    lead.people = people;
   }
 
   if (normalized.includes("pranzo") || normalized.includes("a pranzo")) {
@@ -353,49 +335,135 @@ function updateLeadFromText(text) {
     lead.occasion = occasionMatch[1];
   }
 
-  const timeMatch = text.match(/\b(?:alle|ore)?\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
-  if (timeMatch && normalized.match(/\b(alle|ore|orario|pranzo|cena|sera|mezzogiorno)\b/)) {
-    lead.time = timeMatch[2] ? `${timeMatch[1]}:${timeMatch[2]}` : timeMatch[1];
+  const time = getTimeFromText(text);
+  if (time) {
+    lead.time = time;
 
-    const hour = Number(timeMatch[1]);
+    const hour = Number(time.split(":")[0]);
     if (!lead.meal && hour >= 11 && hour <= 16) lead.meal = "pranzo";
     if (!lead.meal && hour >= 18 && hour <= 23) lead.meal = "cena";
-  } else if (!lead.time) {
-    const spokenTime = parseSpokenTime(text);
-    if (spokenTime) {
-      lead.time = spokenTime;
-      const hour = Number(spokenTime.split(":")[0]);
-      if (!lead.meal && hour >= 11 && hour <= 16) lead.meal = "pranzo";
-      if (!lead.meal && hour >= 18 && hour <= 23) lead.meal = "cena";
+  }
+
+  const date = getDateFromText(text);
+  if (date) {
+    lead.day = date;
+  }
+}
+
+function getNameFromText(text) {
+  const patterns = [
+    /\b(?:mi chiamo|io sono|sono|yo soy|soy)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i,
+    /\b(?:il\s+|la\s+|el\s+)?nome\s+(?:e|è|di)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i,
+    /\ba nome di\s+([a-zA-ZÀ-ÿ' ]{2,40})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+
+    const name = cleanCapturedValue(match[1]);
+    if (looksLikeNameAnswer(name)) {
+      return name;
     }
   }
 
+  return "";
+}
+
+function getPeopleFromText(text) {
+  const trimmed = text.trim();
+  const numberMatch =
+    text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i) ||
+    text.match(/\b(?:per|siamo|saremo|in)\s+(\d{1,3})\b/i);
+
+  if (numberMatch) {
+    return numberMatch[1];
+  }
+
+  if (/^\d{1,3}$/.test(trimmed) && lead.intent && (lead.day || lead.meal || lead.time || lead.occasion)) {
+    return trimmed;
+  }
+
+  const spokenPeople = parsePeopleFromText(text);
+  return spokenPeople ? String(spokenPeople) : "";
+}
+
+function getTimeFromText(text) {
+  const normalized = text.toLowerCase();
+  const numeric = text.match(/\b(?:alle|ore)\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
+
+  if (numeric) {
+    return formatTimeValue(numeric[1], numeric[2]);
+  }
+
+  if (!/\b(alle|ore|orario|pranzo|cena|sera)\b/.test(normalized)) {
+    return "";
+  }
+
+  const numberWords = {
+    una: 1,
+    uno: 1,
+    due: 2,
+    tre: 3,
+    quattro: 4,
+    cinque: 5,
+    sei: 6,
+    sette: 7,
+    otto: 8,
+    nove: 9,
+    dieci: 10,
+    undici: 11,
+    dodici: 12,
+    tredici: 13,
+    quattordici: 14,
+    quindici: 15,
+    sedici: 16,
+    diciassette: 17,
+    diciotto: 18,
+    diciannove: 19,
+    venti: 20,
+    ventuno: 21,
+    ventidue: 22,
+    ventitre: 23,
+    ventitré: 23,
+  };
+
+  const words = Object.keys(numberWords).join("|");
+  const match = normalized.match(new RegExp(`\\b(?:alle|ore)?\\s*(${words})\\b`, "i"));
+
+  return match ? formatTimeValue(numberWords[match[1].toLowerCase()]) : "";
+}
+
+function getDateFromText(text) {
   const datePatterns = [
-    /\b(oggi|domani|dopodomani|stasera|questa sera|a pranzo|a cena)\b/i,
-    /\b(lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)\b/i,
+    /\b(oggi|domani|dopodomani|stasera|questa sera)\b/i,
+    /\b(lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica)\b/i,
     /\b(\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
     /\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/i,
   ];
 
   for (const pattern of datePatterns) {
     const match = text.match(pattern);
-    if (match) {
-      lead.day = match[1];
-      break;
-    }
+    if (match) return match[1];
   }
+
+  return "";
+}
+
+function cleanText(value) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function cleanCapturedValue(value) {
-  return value
-    .replace(/\b(?:e|il mio|la mia|telefono|whatsapp|per|vorrei|prenotare).*$/i, "")
+  return cleanText(value)
+    .replace(/\b(?:e|il mio|la mia|telefono|whatsapp|cellulare|per|vorrei|prenotare|prenotale).*$/i, "")
+    .replace(/^(?:il|la|el)\s+/i, "")
+    .replace(/[.,;:!?]+$/g, "")
     .trim();
 }
 
-function cleanPhoneValue(value) {
-  return value
-    .replace(/^(?:il mio|la mia)?\s*(?:numero|telefono|whatsapp|cellulare)\s*(?:e|è|:)?\s*/i, "")
-    .trim();
+function formatTimeValue(hour, minutes = "00") {
+  return `${String(Number(hour)).padStart(2, "0")}:${minutes || "00"}`;
 }
 
 function looksLikeNameAnswer(text) {
@@ -416,24 +484,9 @@ function looksLikeNameAnswer(text) {
     "pranzo",
     "cena",
     "persone",
+    "numero",
+    "quante",
   ].some((word) => normalized.includes(word));
-}
-
-function looksLikeSpokenPhone(text) {
-  const normalized = text.toLowerCase();
-  const digitWords = ["zero", "uno", "due", "tre", "quattro", "cinque", "sei", "sette", "otto", "nove"];
-  const wordCount = digitWords.reduce(
-    (count, word) => count + (normalized.match(new RegExp(`\\b${word}\\b`, "g")) || []).length,
-    0
-  );
-
-  return (
-    normalized.includes("telefono") ||
-    normalized.includes("numero") ||
-    normalized.includes("whatsapp") ||
-    normalized.includes("cellulare") ||
-    wordCount >= 6
-  );
 }
 
 function parsePeopleFromText(text) {
@@ -470,47 +523,9 @@ function parsePeopleFromText(text) {
   return match ? numberWords[match[1].toLowerCase()] : "";
 }
 
-function parseSpokenTime(text) {
-  const normalized = text.toLowerCase();
-  if (!/\b(alle|ore|orario|pranzo|cena|sera)\b/.test(normalized)) return "";
-
-  const numberWords = {
-    una: 1,
-    uno: 1,
-    due: 2,
-    tre: 3,
-    quattro: 4,
-    cinque: 5,
-    sei: 6,
-    sette: 7,
-    otto: 8,
-    nove: 9,
-    dieci: 10,
-    undici: 11,
-    dodici: 12,
-    tredici: 13,
-    quattordici: 14,
-    quindici: 15,
-    sedici: 16,
-    diciassette: 17,
-    diciotto: 18,
-    diciannove: 19,
-    venti: 20,
-    ventuno: 21,
-    ventidue: 22,
-    ventitre: 23,
-    ventitré: 23,
-  };
-
-  const words = Object.keys(numberWords).join("|");
-  const match = normalized.match(new RegExp(`\\b(?:alle|ore)?\\s*(${words})\\b`, "i"));
-
-  return match ? String(numberWords[match[1].toLowerCase()]) : "";
-}
-
 function getPublicSummary() {
   return [
-    `Tipo richiesta: ${lead.intent || "non rilevato"}`,
+    `Tipo richiesta: ${lead.intent || "richiesta"}`,
     lead.occasion ? `Occasione: ${lead.occasion}` : "",
     lead.name ? `Nome: ${lead.name}` : "",
     lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
@@ -519,7 +534,37 @@ function getPublicSummary() {
     lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
     lead.time ? `Ora: ${lead.time}` : "",
     lead.people ? `Persone: ${lead.people}` : "",
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getWhatsappSummary() {
+  return [
+    `Richiesta: ${lead.intent === "evento" ? "evento / ricorrenza" : "prenotazione tavolo"}`,
+    lead.occasion ? `Occasione: ${lead.occasion}` : "",
+    lead.day ? `Data: ${lead.day}` : "",
+    lead.meal ? `Servizio: ${lead.meal}` : "",
+    lead.time ? `Orario: ${lead.time}` : "",
+    lead.people ? `Persone: ${lead.people}` : "",
+    lead.name ? `Nome: ${lead.name}` : "",
+    getMissingWhatsappFields(),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getMissingWhatsappFields() {
+  const missing = [];
+
+  if (!lead.name) missing.push("nome");
+  if (!lead.day) missing.push("data/giorno");
+  if (lead.intent === "prenotazione" && !lead.meal) missing.push("pranzo o cena");
+  if (lead.intent === "prenotazione" && !lead.time) missing.push("orario");
+  if (!lead.people) missing.push("numero persone");
+  if (lead.intent === "evento" && !lead.occasion) missing.push("tipo occasione");
+
+  return missing.length ? `Da confermare: ${missing.join(", ")}` : "";
 }
 
 function getInternalSummary() {
@@ -544,7 +589,16 @@ function getInternalSummary() {
 }
 
 function canShowContactButtons() {
-  return lead.intent === "prenotazione" || lead.intent === "evento";
+  if (lead.intent === "prenotazione") {
+    return Boolean(lead.day && (lead.meal || lead.time) && lead.people);
+  }
+
+  if (lead.intent === "evento") {
+    const details = [lead.occasion, lead.day, lead.people, lead.name].filter(Boolean).length;
+    return details >= 3;
+  }
+
+  return false;
 }
 
 function updateWhatsAppButton() {
@@ -565,30 +619,16 @@ function openWhatsAppWithLatestMessage(event) {
 }
 
 function buildWhatsAppUrl() {
-  const title =
-    lead.intent === "evento"
-      ? "Buongiorno, vorrei informazioni per organizzare questa occasione a Palazzo Cusani:"
-      : "Buongiorno, vorrei ricevere conferma per questa richiesta a Palazzo Cusani:";
-
   const message = [
-    title,
+    "Buongiorno,",
     getWhatsappSummary(),
     "",
-    "Resto in attesa di conferma o ricontatto. Grazie.",
-  ].filter(Boolean).join("\n");
+    "Resto in attesa di conferma. Grazie.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(message)}`;
-}
-
-function getWhatsappSummary() {
-  const fields = getPublicSummary();
-  const requestText = notes.length ? notes.map((note) => `- ${note}`).join("\n") : "";
-
-  return [
-    fields,
-    requestText ? "Richiesta raccolta:" : "",
-    requestText,
-  ].filter(Boolean).join("\n");
 }
 
 function updateEmailButtons() {
@@ -634,6 +674,15 @@ async function sendCallTranscript() {
     console.warn("Call transcript email not sent", error);
     callTranscriptSent = false;
   }
+}
+
+function showGeneralEmail() {
+  updateEmailButtons();
+  generalEmail.style.display = "block";
+}
+
+function showParkingEmail() {
+  parkingEmail.style.display = "block";
 }
 
 function textLooksLikeEmailRequest(text) {
@@ -767,10 +816,6 @@ function handleRealtimeEvent(message) {
 
   if (textLooksLikeParkingRequest(text)) {
     showParkingEmail();
-  }
-
-  if (textLooksLikeEventRequest(text)) {
-    updateContactButtons();
   }
 }
 
