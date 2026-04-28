@@ -6,19 +6,16 @@
       <stop offset="72%" stop-color="#67a7ff" stop-opacity="0.75"/>
       <stop offset="100%" stop-color="#67a7ff" stop-opacity="0"/>
     </radialGradient>
-
     <radialGradient id="blueGlow" cx="58%" cy="56%" r="58%">
       <stop offset="0%" stop-color="#d8fff7"/>
       <stop offset="44%" stop-color="#74c7ff" stop-opacity="0.85"/>
       <stop offset="100%" stop-color="#74c7ff" stop-opacity="0"/>
     </radialGradient>
-
     <radialGradient id="pinkGlow" cx="42%" cy="64%" r="55%">
       <stop offset="0%" stop-color="#ff4be7"/>
       <stop offset="52%" stop-color="#a95cff" stop-opacity="0.82"/>
       <stop offset="100%" stop-color="#a95cff" stop-opacity="0"/>
     </radialGradient>
-
     <filter id="softBlur" x="-70%" y="-70%" width="240%" height="240%">
       <feGaussianBlur stdDeviation="10"/>
     </filter>
