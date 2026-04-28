@@ -1,1 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" role="img" aria-label="Adriana voice animation">
+  <defs>
+    <radialGradient id="aqua" cx="55%" cy="34%" r="55%">
+      <stop offset="0%" stop-color="#cffffb"/>
+      <stop offset="42%" stop-color="#51dff2"/>
+      <stop offset="100%" stop-color="#5c9bf5" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="violet" cx="38%" cy="68%" r="46%">
+      <stop offset="0%" stop-color="#ff38df"/>
+      <stop offset="55%" stop-color="#9d65ff"/>
+      <stop offset="100%" stop-color="#9d65ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="mint" cx="66%" cy="56%" r="42%">
+      <stop offset="0%" stop-color="#d6fff9"/>
+      <stop offset="100%" stop-color="#77e9ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
 
+  <rect width="240" height="240" fill="transparent"/>
+
+  <g filter="url(#blur)">
+    <ellipse cx="122" cy="112" rx="70" ry="56" fill="url(#aqua)">
+      <animate attributeName="rx" values="64;78;66;72;64" dur="5.4s" repeatCount="indefinite"/>
+      <animate attributeName="ry" values="52;60;70;54;52" dur="5.4s" repeatCount="indefinite"/>
+      <animateTransform attributeName="transform" type="rotate" from="0 122 112" to="360 122 112" dur="13s" repeatCount="indefinite"/>
+    </ellipse>
+
+    <ellipse cx="88" cy="142" rx="34" ry="54" fill="url(#violet)" opacity="0.92">
+      <animate attributeName="cx" values="82;96;88;78;82" dur="4.8s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="144;132;154;142;144" dur="4.8s" repeatCount="indefinite"/>
+      <animateTransform attributeName="transform" type="rotate" values="-22 88 142;18 88 142;-22 88 142" dur="4.8s" repeatCount="indefinite"/>
+    </ellipse>
+
+    <ellipse cx="143" cy="139" rx="48" ry="38" fill="url(#mint)" opacity="0.8">
+      <animate attributeName="cx" values="138;154;146;132;138" dur="6s" repeatCount="indefinite"/>
+      <animate attributeName="ry" values="34;46;36;42;34" dur="6s" repeatCount="indefinite"/>
+    </ellipse>
+  </g>
+</svg>
