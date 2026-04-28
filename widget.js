@@ -31,13 +31,13 @@ btn.onclick = async () => {
 
     console.log("RISPOSTA API SESSION:", data);
 
-    if (!data.client_secret || !data.client_secret.value) {
+    const clientSecret = data.client_secret?.value || data.value;
+
+    if (!clientSecret) {
       alert("Errore API session: " + JSON.stringify(data));
       btn.innerText = "Errore API";
       return;
     }
-
-    const clientSecret = data.client_secret.value;
 
     pc = new RTCPeerConnection();
 
