@@ -22,6 +22,7 @@ const lead = {
   phone: "",
   email: "",
   day: "",
+  meal: "",
   time: "",
   people: "",
   occasion: "",
@@ -204,6 +205,7 @@ function hideStatus() {
 }
 
 function showGeneralEmail() {
+  updateEmailButtons();
   generalEmail.style.display = "block";
 }
 
@@ -248,7 +250,7 @@ function resetSilenceTimer() {
       showStatus("Chiamata chiusa per inattivita");
       stopCall();
     }
-  }, 10000);
+  }, 20000);
 }
 
 function clearSilenceTimer() {
@@ -265,17 +267,17 @@ function rememberUserText(text) {
   notes.push(cleaned);
   resetSilenceTimer();
   updateLeadFromText(cleaned);
-  updateWhatsAppButton();
+  updateContactButtons();
   maybeSendLead();
 }
 
 function updateLeadFromText(text) {
   const normalized = text.toLowerCase();
 
-  if (textLooksLikeBookingRequest(text)) {
-    lead.intent = "prenotazione";
-  } else if (textLooksLikeEventRequest(text)) {
+  if (textLooksLikeEventRequest(text)) {
     lead.intent = "evento";
+  } else if (textLooksLikeBookingRequest(text)) {
+    lead.intent = "prenotazione";
   } else if (!lead.intent && normalized.length > 8) {
     lead.intent = "informazioni";
   }
@@ -298,6 +300,19 @@ function updateLeadFromText(text) {
   const peopleMatch = text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i);
   if (peopleMatch) {
     lead.people = peopleMatch[1];
+  }
+
+  if (normalized.includes("pranzo") || normalized.includes("a pranzo")) {
+    lead.meal = "pranzo";
+  }
+
+  if (
+    normalized.includes("cena") ||
+    normalized.includes("a cena") ||
+    normalized.includes("sera") ||
+    normalized.includes("stasera")
+  ) {
+    lead.meal = "cena";
   }
 
   const occasionMatch = text.match(/\b(cresima|battesimo|compleanno|laurea|comunione|anniversario|matrimonio|meeting|evento|festa|aziendale|conviviale|ricorrenza)\b/i);
@@ -343,6 +358,7 @@ function getLeadSummary() {
     `WhatsApp/telefono cliente: ${lead.phone || "non rilevato"}`,
     `Email cliente: ${lead.email || "non rilevato"}`,
     `Giorno: ${lead.day || "non rilevato"}`,
+    `Pranzo/cena: ${lead.meal || "non rilevato"}`,
     `Ora: ${lead.time || "non rilevato"}`,
     `Persone: ${lead.people || "non rilevato"}`,
     `Occasione/evento: ${lead.occasion || "non rilevato"}`,
@@ -353,24 +369,22 @@ function getLeadSummary() {
 }
 
 function hasBookingDetails() {
-  return lead.intent === "prenotazione" && lead.day && lead.time;
+  return lead.intent === "prenotazione" && lead.day && lead.meal && lead.time && lead.name && lead.phone;
 }
 
-function hasUsefulWhatsAppDetails() {
-  return Boolean(
-    lead.intent === "evento" ||
-      hasBookingDetails() ||
-      lead.day ||
-      lead.time ||
-      lead.people ||
-      lead.occasion ||
-      lead.name ||
-      lead.phone
-  );
+function hasEventDetails() {
+  return lead.intent === "evento" && lead.occasion && lead.name && lead.phone;
+}
+
+function canShowContactButtons() {
+  return hasBookingDetails() || hasEventDetails();
 }
 
 function updateWhatsAppButton() {
-  if (!hasUsefulWhatsAppDetails()) return;
+  if (!canShowContactButtons()) {
+    whatsapp.style.display = "none";
+    return;
+  }
 
   const title =
     lead.intent === "evento"
@@ -384,6 +398,7 @@ function updateWhatsAppButton() {
     lead.name ? `Nome: ${lead.name}` : "",
     lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
     lead.day ? `Giorno/data: ${lead.day}` : "",
+    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
     lead.time ? `Ora: ${lead.time}` : "",
     lead.people ? `Persone: ${lead.people}` : "",
     "",
@@ -397,8 +412,32 @@ function updateWhatsAppButton() {
   whatsapp.style.display = "block";
 }
 
+function updateEmailButtons() {
+  const subject =
+    lead.intent === "evento"
+      ? "Richiesta evento Palazzo Cusani"
+      : "Richiesta informazioni Palazzo Cusani";
+
+  generalEmail.href =
+    "mailto:" +
+    GENERAL_EMAIL +
+    "?subject=" +
+    encodeURIComponent(subject) +
+    "&body=" +
+    encodeURIComponent(getLeadSummary());
+}
+
+function updateContactButtons() {
+  updateWhatsAppButton();
+  updateEmailButtons();
+
+  if (hasEventDetails()) {
+    generalEmail.style.display = "block";
+  }
+}
+
 async function maybeSendLead() {
-  if (leadSent || !hasBookingDetails()) return;
+  if (leadSent || !canShowContactButtons()) return;
 
   leadSent = true;
 
@@ -544,9 +583,8 @@ function handleRealtimeEvent(message) {
   }
 
   if (textLooksLikeEventRequest(text)) {
-    showGeneralEmail();
     updateLeadFromText(text);
-    updateWhatsAppButton();
+    updateContactButtons();
   }
 }
 
