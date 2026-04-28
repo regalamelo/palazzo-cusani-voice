@@ -2,8 +2,9 @@ let pc;
 let stream;
 let audio;
 let isActive = false;
+let leadSent = false;
 
-const PHONE_NUMBER = "393336523536";
+const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
 const PARKING_EMAIL = "segreteriacircolo@cmemi.esercito.difesa.it";
 
@@ -14,12 +15,15 @@ const LEAD_URL = new URL("api/lead", BASE_URL).toString();
 const BUTTON_IMAGE_URL = new URL("adriana-voice.svg", BASE_URL).toString();
 
 const notes = [];
-const contacts = {
-  emails: new Set(),
-  phones: new Set(),
-  names: new Set(),
+const lead = {
+  name: "",
+  phone: "",
+  email: "",
+  day: "",
+  time: "",
+  people: "",
+  intent: "",
 };
-let latestSummary = "";
 
 const widget = document.createElement("div");
 widget.className = "pc-voice-widget";
@@ -51,13 +55,9 @@ actions.className = "pc-voice-actions";
 widget.appendChild(actions);
 
 const whatsapp = document.createElement("a");
-whatsapp.href =
-  "https://wa.me/" +
-  PHONE_NUMBER +
-  "?text=Buongiorno,%20vorrei%20prenotare%20o%20ricevere%20informazioni%20su%20Palazzo%20Cusani.";
 whatsapp.target = "_blank";
 whatsapp.rel = "noopener";
-whatsapp.innerText = "WhatsApp";
+whatsapp.innerText = "Conferma su WhatsApp";
 whatsapp.className = "pc-voice-action pc-voice-whatsapp";
 whatsapp.style.display = "none";
 actions.appendChild(whatsapp);
@@ -81,21 +81,6 @@ parkingEmail.innerText = PARKING_EMAIL;
 parkingEmail.className = "pc-voice-action pc-voice-email";
 parkingEmail.style.display = "none";
 actions.appendChild(parkingEmail);
-
-const recap = document.createElement("details");
-recap.className = "pc-voice-recap";
-recap.style.display = "none";
-recap.innerHTML = `
-  <summary>Riepilogo richiesta</summary>
-  <div class="pc-voice-recap-body" data-recap-body></div>
-  <button class="pc-voice-action pc-voice-email pc-voice-send" data-recap-email type="button">
-    Invia richiesta via email
-  </button>
-`;
-actions.appendChild(recap);
-
-const recapBody = recap.querySelector("[data-recap-body]");
-const recapEmail = recap.querySelector("[data-recap-email]");
 
 const style = document.createElement("style");
 style.innerHTML = `
@@ -156,7 +141,7 @@ style.innerHTML = `
   }
 
   .pc-voice-status {
-    max-width: 240px;
+    max-width: 260px;
     padding: 7px 12px;
     color: #2d2438;
     background: rgba(255, 255, 255, 0.94);
@@ -194,36 +179,6 @@ style.innerHTML = `
     background: #1f5f8f;
   }
 
-  .pc-voice-recap {
-    width: min(340px, calc(100vw - 32px));
-    color: #182236;
-    background: rgba(255, 255, 255, 0.96);
-    border: 1px solid rgba(24, 34, 54, 0.14);
-    border-radius: 8px;
-    box-shadow: 0 12px 32px rgba(24, 34, 54, 0.16);
-    font-size: 13px;
-  }
-
-  .pc-voice-recap summary {
-    cursor: pointer;
-    padding: 11px 14px;
-    font-weight: 700;
-  }
-
-  .pc-voice-recap-body {
-    padding: 0 14px 12px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-  }
-
-  .pc-voice-recap .pc-voice-action {
-    display: block;
-    margin: 0 12px 12px;
-    border: 0;
-    cursor: pointer;
-    font-family: inherit;
-  }
-
   .pc-voice-widget.is-active .pc-voice-button-visual {
     animation: pcVoiceFloat 1.4s ease-in-out infinite;
   }
@@ -245,10 +200,6 @@ function hideStatus() {
   statusText.style.display = "none";
 }
 
-function showWhatsApp() {
-  whatsapp.style.display = "block";
-}
-
 function showGeneralEmail() {
   generalEmail.style.display = "block";
 }
@@ -261,7 +212,6 @@ function hideActionButtons() {
   whatsapp.style.display = "none";
   generalEmail.style.display = "none";
   parkingEmail.style.display = "none";
-  recap.style.display = "none";
 }
 
 function setActive(active) {
@@ -291,72 +241,130 @@ function rememberUserText(text) {
   if (!cleaned || notes.includes(cleaned)) return;
 
   notes.push(cleaned);
+  updateLeadFromText(cleaned);
+  updateWhatsAppButton();
+  maybeSendLead();
+}
 
-  const emailMatches = cleaned.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
-  emailMatches.forEach((item) => contacts.emails.add(item));
+function updateLeadFromText(text) {
+  const normalized = text.toLowerCase();
 
-  const phoneMatches = cleaned.match(/(?:\+?\d[\s.-]?){7,}/g) || [];
-  phoneMatches.forEach((item) => contacts.phones.add(item.trim()));
+  if (textLooksLikeBookingRequest(text)) {
+    lead.intent = "prenotazione";
+  } else if (!lead.intent && normalized.length > 8) {
+    lead.intent = "informazioni";
+  }
 
-  const nameMatch = cleaned.match(/\b(?:mi chiamo|sono)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i);
+  const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  if (emailMatch) {
+    lead.email = emailMatch[0];
+  }
+
+  const phoneMatch = text.match(/(?:\+?\d[\s.-]?){8,}/);
+  if (phoneMatch) {
+    lead.phone = phoneMatch[0].trim();
+  }
+
+  const nameMatch = text.match(/\b(?:mi chiamo|sono|nome e)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i);
   if (nameMatch?.[1]) {
-    contacts.names.add(nameMatch[1].trim());
+    lead.name = cleanCapturedValue(nameMatch[1]);
   }
 
-  updateRecap();
+  const peopleMatch = text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i);
+  if (peopleMatch) {
+    lead.people = peopleMatch[1];
+  }
+
+  const timeMatch = text.match(/\b(?:alle|ore)?\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
+  if (timeMatch && normalized.match(/\b(alle|ore|orario|pranzo|cena|sera|mezzogiorno)\b/)) {
+    lead.time = timeMatch[2] ? `${timeMatch[1]}:${timeMatch[2]}` : timeMatch[1];
+  }
+
+  const datePatterns = [
+    /\b(oggi|domani|dopodomani|stasera|questa sera|a pranzo|a cena)\b/i,
+    /\b(lunedi|martedi|mercoledi|giovedi|venerdi|sabato|domenica)\b/i,
+    /\b(\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
+    /\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/i,
+  ];
+
+  for (const pattern of datePatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      lead.day = match[1];
+      break;
+    }
+  }
 }
 
-function updateRecap() {
-  if (!notes.length) return;
+function cleanCapturedValue(value) {
+  return value
+    .replace(/\b(?:e|il mio|la mia|telefono|whatsapp|per|vorrei|prenotare).*$/i, "")
+    .trim();
+}
 
-  const names = Array.from(contacts.names).join(", ") || "non rilevato";
-  const phones = Array.from(contacts.phones).join(", ") || "non rilevato";
-  const emails = Array.from(contacts.emails).join(", ") || "non rilevato";
+function getLeadSummary() {
   const transcript = notes.map((note) => `- ${note}`).join("\n");
-  const body =
-    `Nome: ${names}\nTelefono: ${phones}\nEmail: ${emails}\n\nRichiesta:\n${transcript}`;
 
-  latestSummary = body;
-  recapBody.textContent = body;
-  recap.style.display = "block";
+  return [
+    "Nuova richiesta dal voice agent Palazzo Cusani",
+    "",
+    `Obiettivo: ${lead.intent || "non rilevato"}`,
+    `Nome: ${lead.name || "non rilevato"}`,
+    `WhatsApp/telefono cliente: ${lead.phone || "non rilevato"}`,
+    `Email cliente: ${lead.email || "non rilevato"}`,
+    `Giorno: ${lead.day || "non rilevato"}`,
+    `Ora: ${lead.time || "non rilevato"}`,
+    `Persone: ${lead.people || "non rilevato"}`,
+    "",
+    "Trascrizione:",
+    transcript || "non disponibile",
+  ].join("\n");
 }
 
-async function sendSummaryByEmail() {
-  if (!latestSummary) {
-    alert("Non c'e ancora un riepilogo da inviare.");
-    return;
-  }
+function hasBookingDetails() {
+  return lead.intent === "prenotazione" && lead.day && lead.time;
+}
 
-  recapEmail.disabled = true;
-  recapEmail.innerText = "Invio in corso...";
+function updateWhatsAppButton() {
+  if (!hasBookingDetails()) return;
+
+  const message = [
+    "Buongiorno, vorrei confermare questa richiesta per Palazzo Cusani:",
+    lead.name ? `Nome: ${lead.name}` : "",
+    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
+    `Giorno: ${lead.day}`,
+    `Ora: ${lead.time}`,
+    lead.people ? `Persone: ${lead.people}` : "",
+    "",
+    "Resto in attesa di conferma. Grazie.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  whatsapp.href = `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(message)}`;
+  whatsapp.style.display = "block";
+}
+
+async function maybeSendLead() {
+  if (leadSent || !hasBookingDetails()) return;
+
+  leadSent = true;
 
   try {
-    const response = await fetch(LEAD_URL, {
+    await fetch(LEAD_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        summary: latestSummary,
+        summary: getLeadSummary(),
       }),
     });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "Invio non riuscito");
-    }
-
-    recapEmail.innerText = "Richiesta inviata";
   } catch (error) {
-    alert("Errore invio email: " + error.message);
-    recapEmail.innerText = "Invia richiesta via email";
-  } finally {
-    recapEmail.disabled = false;
+    console.warn("Lead email not sent", error);
+    leadSent = false;
   }
 }
-
-recapEmail.addEventListener("click", sendSummaryByEmail);
 
 function textLooksLikeEmailRequest(text) {
   const normalized = text.toLowerCase();
@@ -378,9 +386,27 @@ function textLooksLikeBookingRequest(text) {
   const normalized = text.toLowerCase();
   return (
     normalized.includes("prenot") ||
-    normalized.includes("whatsapp") ||
-    normalized.includes("telefono") ||
-    normalized.includes("contatt")
+    normalized.includes("riserv") ||
+    normalized.includes("tavolo") ||
+    normalized.includes("pranzo") ||
+    normalized.includes("cena")
+  );
+}
+
+function textLooksLikeEventRequest(text) {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("evento") ||
+    normalized.includes("eventi") ||
+    normalized.includes("meeting") ||
+    normalized.includes("festa") ||
+    normalized.includes("laurea") ||
+    normalized.includes("comunione") ||
+    normalized.includes("aziendale") ||
+    normalized.includes("conviviale") ||
+    normalized.includes("occasione") ||
+    normalized.includes("salone") ||
+    normalized.includes("sala")
   );
 }
 
@@ -438,8 +464,12 @@ function handleRealtimeEvent(message) {
     showParkingEmail();
   }
 
-  if (textLooksLikeBookingRequest(text)) {
-    showWhatsApp();
+  if (textLooksLikeEventRequest(text)) {
+    showGeneralEmail();
+    whatsapp.href =
+      `https://wa.me/${PALAZZO_WHATSAPP}?text=` +
+      encodeURIComponent("Buongiorno, vorrei ricevere informazioni per organizzare un evento o un'occasione a Palazzo Cusani.");
+    whatsapp.style.display = "block";
   }
 }
 
