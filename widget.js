@@ -1,44 +1,74 @@
 let pc;
 let stream;
 let dc;
+let isActive = false;
+
+const style = document.createElement("style");
+style.innerHTML = `
+  #voiceOrb {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 96px;
+    height: 96px;
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    border: none;
+    cursor: pointer;
+    z-index: 9999;
+    background: radial-gradient(circle at 30% 25%, #ffffff, #d8c7ae 28%, #8b7358 58%, #111 100%);
+    box-shadow:
+      0 0 0 0 rgba(139, 115, 88, 0.45),
+      0 24px 70px rgba(0, 0, 0, 0.28);
+    transition: transform 0.25s ease, box-shadow 0.25s ease, opacity 0.25s ease;
+  }
+
+  #voiceOrb:hover {
+    transform: translate(-50%, -50%) scale(1.05);
+  }
+
+  #voiceOrb.listening {
+    animation: voicePulse 1.4s infinite ease-in-out;
+  }
+
+  #voiceOrb.connecting {
+    opacity: 0.65;
+    animation: voiceSpin 1.2s infinite linear;
+  }
+
+  @keyframes voicePulse {
+    0% {
+      box-shadow:
+        0 0 0 0 rgba(139, 115, 88, 0.48),
+        0 24px 70px rgba(0, 0, 0, 0.28);
+    }
+    70% {
+      box-shadow:
+        0 0 0 28px rgba(139, 115, 88, 0),
+        0 24px 70px rgba(0, 0, 0, 0.28);
+    }
+    100% {
+      box-shadow:
+        0 0 0 0 rgba(139, 115, 88, 0),
+        0 24px 70px rgba(0, 0, 0, 0.28);
+    }
+  }
+
+  @keyframes voiceSpin {
+    from {
+      filter: hue-rotate(0deg);
+    }
+    to {
+      filter: hue-rotate(360deg);
+    }
+  }
+`;
+document.head.appendChild(style);
 
 const btn = document.createElement("button");
-btn.innerText = "🎙️ Parla con Palazzo Cusani";
-btn.style.cssText = `
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 22px 28px;
-  border-radius: 999px;
-  background: #111;
-  color: #fff;
-  font-size: 16px;
-  border: 0;
-  cursor: pointer;
-  z-index: 9999;
-`;
-
-const stopBtn = document.createElement("button");
-stopBtn.innerText = "Termina";
-stopBtn.style.cssText = `
-  position: fixed;
-  top: calc(50% + 70px);
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 12px 20px;
-  border-radius: 999px;
-  background: #ddd;
-  color: #111;
-  font-size: 14px;
-  border: 0;
-  cursor: pointer;
-  z-index: 9999;
-  display: none;
-`;
-
+btn.id = "voiceOrb";
+btn.setAttribute("aria-label", "Avvia o termina assistente vocale");
 document.body.appendChild(btn);
-document.body.appendChild(stopBtn);
 
 const audio = document.createElement("audio");
 audio.autoplay = true;
@@ -46,8 +76,16 @@ audio.playsInline = true;
 document.body.appendChild(audio);
 
 btn.onclick = async () => {
+  if (isActive) {
+    stopCall();
+  } else {
+    await startCall();
+  }
+};
+
+async function startCall() {
   try {
-    btn.innerText = "Connessione...";
+    btn.classList.add("connecting");
 
     const tokenRes = await fetch("/api/session", { method: "POST" });
     const data = await tokenRes.json();
@@ -56,7 +94,7 @@ btn.onclick = async () => {
 
     if (!clientSecret) {
       alert("Errore API session: " + JSON.stringify(data));
-      btn.innerText = "Errore API";
+      btn.classList.remove("connecting");
       return;
     }
 
@@ -67,11 +105,23 @@ btn.onclick = async () => {
       try {
         await audio.play();
       } catch (e) {
-        console.log("Autoplay bloccato:", e);
+        console.log("Audio play bloccato:", e);
       }
     };
 
+    pc.addTransceiver("audio", { direction: "recvonly" });
+
     dc = pc.createDataChannel("oai-events");
+
+    dc.onopen = () => {
+      dc.send(JSON.stringify({
+        type: "response.create",
+        response: {
+          modalities: ["audio"],
+          instructions: "Saluta subito l’utente in italiano. Di': Benvenuto a Palazzo Cusani, sono il tuo assistente vocale. Posso aiutarti con prenotazioni, orari, eventi e informazioni sul palazzo."
+        }
+      }));
+    };
 
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -94,7 +144,7 @@ btn.onclick = async () => {
     if (!sdpRes.ok) {
       const errorText = await sdpRes.text();
       alert("Errore realtime: " + errorText);
-      btn.innerText = "Errore Realtime";
+      btn.classList.remove("connecting");
       return;
     }
 
@@ -105,45 +155,26 @@ btn.onclick = async () => {
       sdp: answer
     });
 
-    btn.innerText = "🎙️ In ascolto...";
-    stopBtn.style.display = "block";
-
-    setTimeout(() => {
-      if (dc && dc.readyState === "open") {
-        dc.send(JSON.stringify({
-          type: "response.create",
-          response: {
-            modalities: ["audio"],
-            instructions: "Saluta l’utente in italiano con tono elegante e professionale. Presentati come assistente vocale di Palazzo Cusani e chiedi come puoi aiutare."
-          }
-        }));
-      }
-    }, 1200);
-
+    isActive = true;
+    btn.classList.remove("connecting");
+    btn.classList.add("listening");
   } catch (error) {
     console.error(error);
     alert("Errore: " + error.message);
-    btn.innerText = "Errore";
+    btn.classList.remove("connecting");
   }
-};
+}
 
-stopBtn.onclick = () => {
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop());
-  }
-
-  if (dc) {
-    dc.close();
-  }
-
-  if (pc) {
-    pc.close();
-  }
+function stopCall() {
+  if (stream) stream.getTracks().forEach(track => track.stop());
+  if (dc) dc.close();
+  if (pc) pc.close();
 
   stream = null;
   dc = null;
   pc = null;
+  isActive = false;
 
-  btn.innerText = "🎙️ Parla con Palazzo Cusani";
-  stopBtn.style.display = "none";
-};
+  btn.classList.remove("connecting");
+  btn.classList.remove("listening");
+}
