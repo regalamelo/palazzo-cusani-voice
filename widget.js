@@ -61,11 +61,13 @@ actions.className = "pc-voice-actions";
 widget.appendChild(actions);
 
 const whatsapp = document.createElement("a");
+whatsapp.href = "#";
 whatsapp.target = "_blank";
 whatsapp.rel = "noopener";
 whatsapp.innerText = "Conferma su WhatsApp";
 whatsapp.className = "pc-voice-action pc-voice-whatsapp";
 whatsapp.style.display = "none";
+whatsapp.addEventListener("click", openWhatsAppWithLatestMessage);
 actions.appendChild(whatsapp);
 
 const generalEmail = document.createElement("a");
@@ -105,8 +107,8 @@ style.innerHTML = `
 
   .pc-voice-button {
     position: relative;
-    width: 156px;
-    height: 170px;
+    width: 220px;
+    height: 235px;
     padding: 0;
     border: 0;
     cursor: pointer;
@@ -118,8 +120,8 @@ style.innerHTML = `
     position: absolute;
     left: 50%;
     top: 0;
-    width: 150px;
-    height: 150px;
+    width: 215px;
+    height: 215px;
     transform: translateX(-50%);
     background-size: contain;
     background-position: center;
@@ -130,7 +132,7 @@ style.innerHTML = `
   .pc-voice-button-label {
     position: absolute;
     left: 50%;
-    bottom: 0;
+    bottom: 4px;
     transform: translateX(-50%);
     min-width: 126px;
     padding: 6px 10px;
@@ -221,6 +223,26 @@ function hideActionButtons() {
   parkingEmail.style.display = "none";
 }
 
+function resetLeadState() {
+  notes.length = 0;
+  leadSent = false;
+  callTranscriptSent = false;
+
+  Object.assign(lead, {
+    name: "",
+    phone: "",
+    email: "",
+    day: "",
+    meal: "",
+    time: "",
+    people: "",
+    occasion: "",
+    intent: "",
+  });
+
+  hideActionButtons();
+}
+
 function setActive(active) {
   isActive = active;
   widget.classList.toggle("is-active", active);
@@ -244,7 +266,7 @@ function stopCall() {
   eventsChannel = null;
   greeted = false;
   setActive(false);
-  hideActionButtons();
+  updateContactButtons();
 }
 
 function resetSilenceTimer() {
@@ -272,16 +294,15 @@ function rememberUserText(text) {
   resetSilenceTimer();
   updateLeadFromText(cleaned);
   updateContactButtons();
-  maybeSendLead();
 }
 
 function updateLeadFromText(text) {
   const normalized = text.toLowerCase();
 
-  if (textLooksLikeEventRequest(text)) {
-    lead.intent = "evento";
-  } else if (textLooksLikeBookingRequest(text)) {
+  if (textLooksLikeBookingRequest(text)) {
     lead.intent = "prenotazione";
+  } else if (textLooksLikeEventRequest(text) && lead.intent !== "prenotazione") {
+    lead.intent = "evento";
   } else if (!lead.intent && normalized.length > 8) {
     lead.intent = "informazioni";
   }
@@ -305,9 +326,16 @@ function updateLeadFromText(text) {
     lead.name = cleanCapturedValue(text);
   }
 
-  const peopleMatch = text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i);
+  const peopleMatch =
+    text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i) ||
+    text.match(/\b(?:per|siamo|saremo|in)\s+(\d{1,3})\b/i);
   if (peopleMatch) {
     lead.people = peopleMatch[1];
+  } else if (!lead.people) {
+    const spokenPeople = parsePeopleFromText(text);
+    if (spokenPeople) {
+      lead.people = String(spokenPeople);
+    }
   }
 
   if (normalized.includes("pranzo") || normalized.includes("a pranzo")) {
@@ -323,8 +351,8 @@ function updateLeadFromText(text) {
     lead.meal = "cena";
   }
 
-  const occasionMatch = text.match(/\b(cresima|battesimo|compleanno|laurea|comunione|anniversario|matrimonio|meeting|evento|festa|aziendale|conviviale|ricorrenza)\b/i);
-  if (occasionMatch) {
+  const occasionMatch = text.match(/\b(cresima|battesimo|compleanno|laurea|comunione|anniversario|matrimonio|meeting|festa|aziendale|conviviale|ricorrenza)\b/i);
+  if (occasionMatch && lead.intent !== "prenotazione") {
     lead.occasion = occasionMatch[1];
   }
 
@@ -339,6 +367,20 @@ function updateLeadFromText(text) {
 
     if (!lead.meal && hour >= 18 && hour <= 23) {
       lead.meal = "cena";
+    }
+  } else if (!lead.time) {
+    const spokenTime = parseSpokenTime(text);
+    if (spokenTime) {
+      lead.time = spokenTime;
+
+      const hour = Number(spokenTime.split(":")[0]);
+      if (!lead.meal && hour >= 11 && hour <= 16) {
+        lead.meal = "pranzo";
+      }
+
+      if (!lead.meal && hour >= 18 && hour <= 23) {
+        lead.meal = "cena";
+      }
     }
   }
 
@@ -419,6 +461,76 @@ function looksLikeSpokenPhone(text) {
   );
 }
 
+function parsePeopleFromText(text) {
+  const normalized = text.toLowerCase();
+  const numberWords = {
+    uno: 1,
+    una: 1,
+    due: 2,
+    tre: 3,
+    quattro: 4,
+    cinque: 5,
+    sei: 6,
+    sette: 7,
+    otto: 8,
+    nove: 9,
+    dieci: 10,
+    undici: 11,
+    dodici: 12,
+    tredici: 13,
+    quattordici: 14,
+    quindici: 15,
+    sedici: 16,
+    diciassette: 17,
+    diciotto: 18,
+    diciannove: 19,
+    venti: 20,
+  };
+  const words = Object.keys(numberWords).join("|");
+  const match =
+    normalized.match(new RegExp(`\\b(${words})\\s+(?:persone|ospiti|coperti)\\b`, "i")) ||
+    normalized.match(new RegExp(`\\b(?:per|siamo|saremo|in)\\s+(${words})\\b`, "i"));
+
+  return match ? numberWords[match[1].toLowerCase()] : "";
+}
+
+function parseSpokenTime(text) {
+  const normalized = text.toLowerCase();
+  if (!/\b(alle|ore|orario|pranzo|cena|sera)\b/.test(normalized)) return "";
+
+  const numberWords = {
+    una: 1,
+    uno: 1,
+    due: 2,
+    tre: 3,
+    quattro: 4,
+    cinque: 5,
+    sei: 6,
+    sette: 7,
+    otto: 8,
+    nove: 9,
+    dieci: 10,
+    undici: 11,
+    dodici: 12,
+    tredici: 13,
+    quattordici: 14,
+    quindici: 15,
+    sedici: 16,
+    diciassette: 17,
+    diciotto: 18,
+    diciannove: 19,
+    venti: 20,
+    ventuno: 21,
+    ventidue: 22,
+    ventitre: 23,
+    ventitré: 23,
+  };
+  const words = Object.keys(numberWords).join("|");
+  const match = normalized.match(new RegExp(`\\b(?:alle|ore)?\\s*(${words})\\b`, "i"));
+
+  return match ? String(numberWords[match[1].toLowerCase()]) : "";
+}
+
 function getPublicSummary() {
   return [
     `Tipo richiesta: ${lead.intent || "non rilevato"}`,
@@ -457,15 +569,15 @@ function getInternalSummary() {
 }
 
 function hasBookingDetails() {
-  return lead.intent === "prenotazione" && lead.day && lead.meal && lead.time && lead.name;
+  return lead.intent === "prenotazione" && lead.day && lead.meal && lead.time && lead.name && lead.people;
 }
 
 function hasEventDetails() {
-  return lead.intent === "evento" && lead.occasion && lead.name;
+  return lead.intent === "evento" && lead.occasion && lead.day && lead.name && lead.people;
 }
 
 function canShowContactButtons() {
-  return lead.intent === "prenotazione" || lead.intent === "evento" || hasBookingDetails() || hasEventDetails();
+  return lead.intent === "prenotazione" || lead.intent === "evento";
 }
 
 function updateWhatsAppButton() {
@@ -474,6 +586,20 @@ function updateWhatsAppButton() {
     return;
   }
 
+  whatsapp.href = buildWhatsAppUrl();
+  whatsapp.innerText = "Invia richiesta su WhatsApp";
+  whatsapp.style.display = "block";
+}
+
+function openWhatsAppWithLatestMessage(event) {
+  event.preventDefault();
+
+  if (!canShowContactButtons()) return;
+
+  window.open(buildWhatsAppUrl(), "_blank", "noopener");
+}
+
+function buildWhatsAppUrl() {
   const title =
     lead.intent === "evento"
       ? "Buongiorno, vorrei informazioni per organizzare questa occasione a Palazzo Cusani:"
@@ -481,23 +607,27 @@ function updateWhatsAppButton() {
 
   const message = [
     title,
-    lead.intent ? `Tipo richiesta: ${lead.intent}` : "",
-    lead.occasion ? `Occasione: ${lead.occasion}` : "",
-    lead.name ? `Nome: ${lead.name}` : "",
-    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
-    lead.day ? `Giorno/data: ${lead.day}` : "",
-    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
-    lead.time ? `Ora: ${lead.time}` : "",
-    lead.people ? `Persone: ${lead.people}` : "",
+    getWhatsappSummary(),
     "",
     "Resto in attesa di conferma o ricontatto. Grazie.",
   ]
     .filter(Boolean)
     .join("\n");
 
-  whatsapp.href = `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(message)}`;
-  whatsapp.innerText = "Invia richiesta su WhatsApp";
-  whatsapp.style.display = "block";
+  return `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(message)}`;
+}
+
+function getWhatsappSummary() {
+  const fields = getPublicSummary();
+  const requestText = notes.length ? notes.map((note) => `- ${note}`).join("\n") : "";
+
+  return [
+    fields,
+    requestText ? "Richiesta raccolta:" : "",
+    requestText,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function updateEmailButtons() {
@@ -525,7 +655,7 @@ function updateContactButtons() {
 }
 
 async function maybeSendLead() {
-  if (leadSent || !canShowContactButtons()) return;
+  if (leadSent || !(hasBookingDetails() || hasEventDetails())) return;
 
   leadSent = true;
 
@@ -617,11 +747,6 @@ function textLooksLikeEventRequest(text) {
 }
 
 function getEventText(event) {
-  if (event?.type?.includes("input_audio_transcription") && event.transcript) {
-    rememberUserText(event.transcript);
-    return event.transcript;
-  }
-
   const textParts = [];
 
   function collect(value) {
@@ -647,7 +772,18 @@ function getEventText(event) {
     }
   }
 
-  collect(event);
+  if (event?.type?.includes("input_audio_transcription")) {
+    collect(event.transcript);
+  }
+
+  if (event?.item?.role === "user") {
+    collect(event.item);
+  }
+
+  if (event?.role === "user") {
+    collect(event);
+  }
+
   return textParts.join(" ");
 }
 
@@ -680,6 +816,11 @@ function handleRealtimeEvent(message) {
   }
 
   const text = getEventText(event);
+  if (!text) {
+    return;
+  }
+
+  rememberUserText(text);
 
   if (textLooksLikeEmailRequest(text)) {
     showGeneralEmail();
@@ -690,7 +831,6 @@ function handleRealtimeEvent(message) {
   }
 
   if (textLooksLikeEventRequest(text)) {
-    updateLeadFromText(text);
     updateContactButtons();
   }
 }
@@ -702,6 +842,7 @@ btn.onclick = async () => {
   }
 
   try {
+    resetLeadState();
     widget.classList.add("is-active");
     showStatus("Richiesta microfono...");
 
