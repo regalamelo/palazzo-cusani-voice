@@ -4,6 +4,7 @@ let audio;
 let isActive = false;
 let leadSent = false;
 let callTranscriptSent = false;
+let silenceTimer;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -23,6 +24,7 @@ const lead = {
   day: "",
   time: "",
   people: "",
+  occasion: "",
   intent: "",
 };
 
@@ -58,7 +60,7 @@ widget.appendChild(actions);
 const whatsapp = document.createElement("a");
 whatsapp.target = "_blank";
 whatsapp.rel = "noopener";
-whatsapp.innerText = "Conferma su WhatsApp";
+whatsapp.innerText = "Invia richiesta su WhatsApp";
 whatsapp.className = "pc-voice-action pc-voice-whatsapp";
 whatsapp.style.display = "none";
 actions.appendChild(whatsapp);
@@ -227,6 +229,7 @@ function setActive(active) {
 }
 
 function stopCall() {
+  clearSilenceTimer();
   sendCallTranscript();
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
@@ -238,11 +241,29 @@ function stopCall() {
   hideActionButtons();
 }
 
+function resetSilenceTimer() {
+  clearSilenceTimer();
+  silenceTimer = setTimeout(() => {
+    if (isActive) {
+      showStatus("Chiamata chiusa per inattivita");
+      stopCall();
+    }
+  }, 10000);
+}
+
+function clearSilenceTimer() {
+  if (silenceTimer) {
+    clearTimeout(silenceTimer);
+    silenceTimer = null;
+  }
+}
+
 function rememberUserText(text) {
   const cleaned = text.trim();
   if (!cleaned || notes.includes(cleaned)) return;
 
   notes.push(cleaned);
+  resetSilenceTimer();
   updateLeadFromText(cleaned);
   updateWhatsAppButton();
   maybeSendLead();
@@ -253,6 +274,8 @@ function updateLeadFromText(text) {
 
   if (textLooksLikeBookingRequest(text)) {
     lead.intent = "prenotazione";
+  } else if (textLooksLikeEventRequest(text)) {
+    lead.intent = "evento";
   } else if (!lead.intent && normalized.length > 8) {
     lead.intent = "informazioni";
   }
@@ -275,6 +298,11 @@ function updateLeadFromText(text) {
   const peopleMatch = text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i);
   if (peopleMatch) {
     lead.people = peopleMatch[1];
+  }
+
+  const occasionMatch = text.match(/\b(cresima|battesimo|compleanno|laurea|comunione|anniversario|matrimonio|meeting|evento|festa|aziendale|conviviale|ricorrenza)\b/i);
+  if (occasionMatch) {
+    lead.occasion = occasionMatch[1];
   }
 
   const timeMatch = text.match(/\b(?:alle|ore)?\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
@@ -317,6 +345,7 @@ function getLeadSummary() {
     `Giorno: ${lead.day || "non rilevato"}`,
     `Ora: ${lead.time || "non rilevato"}`,
     `Persone: ${lead.people || "non rilevato"}`,
+    `Occasione/evento: ${lead.occasion || "non rilevato"}`,
     "",
     "Trascrizione:",
     transcript || "non disponibile",
@@ -327,23 +356,44 @@ function hasBookingDetails() {
   return lead.intent === "prenotazione" && lead.day && lead.time;
 }
 
+function hasUsefulWhatsAppDetails() {
+  return Boolean(
+    lead.intent === "evento" ||
+      hasBookingDetails() ||
+      lead.day ||
+      lead.time ||
+      lead.people ||
+      lead.occasion ||
+      lead.name ||
+      lead.phone
+  );
+}
+
 function updateWhatsAppButton() {
-  if (!hasBookingDetails()) return;
+  if (!hasUsefulWhatsAppDetails()) return;
+
+  const title =
+    lead.intent === "evento"
+      ? "Buongiorno, vorrei ricevere informazioni per organizzare un evento o un'occasione a Palazzo Cusani:"
+      : "Buongiorno, vorrei ricevere conferma per questa richiesta a Palazzo Cusani:";
 
   const message = [
-    "Buongiorno, vorrei confermare questa richiesta per Palazzo Cusani:",
+    title,
+    lead.intent ? `Tipo richiesta: ${lead.intent}` : "",
+    lead.occasion ? `Occasione: ${lead.occasion}` : "",
     lead.name ? `Nome: ${lead.name}` : "",
     lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
-    `Giorno: ${lead.day}`,
-    `Ora: ${lead.time}`,
+    lead.day ? `Giorno/data: ${lead.day}` : "",
+    lead.time ? `Ora: ${lead.time}` : "",
     lead.people ? `Persone: ${lead.people}` : "",
     "",
-    "Resto in attesa di conferma. Grazie.",
+    "Resto in attesa di conferma o ricontatto. Grazie.",
   ]
     .filter(Boolean)
     .join("\n");
 
   whatsapp.href = `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(message)}`;
+  whatsapp.innerText = "Invia richiesta su WhatsApp";
   whatsapp.style.display = "block";
 }
 
@@ -421,6 +471,12 @@ function textLooksLikeEventRequest(text) {
   return (
     normalized.includes("evento") ||
     normalized.includes("eventi") ||
+    normalized.includes("cresima") ||
+    normalized.includes("battesimo") ||
+    normalized.includes("compleanno") ||
+    normalized.includes("ricorrenza") ||
+    normalized.includes("anniversario") ||
+    normalized.includes("matrimonio") ||
     normalized.includes("meeting") ||
     normalized.includes("festa") ||
     normalized.includes("laurea") ||
@@ -489,10 +545,8 @@ function handleRealtimeEvent(message) {
 
   if (textLooksLikeEventRequest(text)) {
     showGeneralEmail();
-    whatsapp.href =
-      `https://wa.me/${PALAZZO_WHATSAPP}?text=` +
-      encodeURIComponent("Buongiorno, vorrei ricevere informazioni per organizzare un evento o un'occasione a Palazzo Cusani.");
-    whatsapp.style.display = "block";
+    updateLeadFromText(text);
+    updateWhatsAppButton();
   }
 }
 
@@ -534,6 +588,7 @@ btn.onclick = async () => {
       if (pc?.connectionState === "connected") {
         setActive(true);
         hideStatus();
+        resetSilenceTimer();
       }
 
       if (["failed", "disconnected", "closed"].includes(pc?.connectionState)) {
