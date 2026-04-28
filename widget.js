@@ -1,6 +1,7 @@
 let pc = null;
 let stream = null;
-let isActive = false;
+let dc = null;
+let active = false;
 
 const style = document.createElement("style");
 style.innerHTML = `
@@ -50,11 +51,22 @@ style.innerHTML = `
   }
 
   #voiceOrb.connecting::before {
-    animation: blobMove 1.4s ease-in-out infinite alternate;
+    animation: blobMove 1.2s ease-in-out infinite alternate;
   }
 
   #voiceOrb.listening::before {
-    animation: blobMove 2.2s ease-in-out infinite alternate, activePulse 1.4s ease-in-out infinite;
+    animation: blobMove 2s ease-in-out infinite alternate, activePulse 1.4s ease-in-out infinite;
+  }
+
+  #voiceStatus {
+    position: fixed;
+    top: calc(50% + 135px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: Arial, sans-serif;
+    font-size: 13px;
+    color: #555;
+    z-index: 9999;
   }
 
   @keyframes blobMove {
@@ -94,18 +106,23 @@ style.innerHTML = `
 `;
 document.head.appendChild(style);
 
-const btn = document.createElement("button");
-btn.id = "voiceOrb";
-btn.setAttribute("aria-label", "Avvia o termina assistente vocale");
-document.body.appendChild(btn);
+const orb = document.createElement("button");
+orb.id = "voiceOrb";
+orb.setAttribute("aria-label", "Avvia o termina assistente vocale");
+document.body.appendChild(orb);
+
+const status = document.createElement("div");
+status.id = "voiceStatus";
+status.innerText = "Tocca la bolla";
+document.body.appendChild(status);
 
 const audio = document.createElement("audio");
 audio.autoplay = true;
 audio.playsInline = true;
 document.body.appendChild(audio);
 
-btn.onclick = async () => {
-  if (isActive) {
+orb.onclick = async () => {
+  if (active) {
     stopCall();
   } else {
     await startCall();
@@ -114,30 +131,66 @@ btn.onclick = async () => {
 
 async function startCall() {
   try {
-    btn.classList.add("connecting");
+    status.innerText = "Connessione...";
+    orb.classList.add("connecting");
 
-    const tokenResponse = await fetch("/api/session", { method: "POST" });
+    const tokenResponse = await fetch("/api/session", {
+      method: "POST"
+    });
+
     const data = await tokenResponse.json();
 
-    const EPHEMERAL_KEY = data.value;
-
-    if (!EPHEMERAL_KEY) {
-      alert("Errore token OpenAI: " + JSON.stringify(data));
-      btn.classList.remove("connecting");
+    if (!data.value) {
+      alert("Errore token: " + JSON.stringify(data));
+      status.innerText = "Errore token";
+      orb.classList.remove("connecting");
       return;
     }
 
+    const EPHEMERAL_KEY = data.value;
+
     pc = new RTCPeerConnection();
 
-    pc.ontrack = (event) => {
+    pc.ontrack = async (event) => {
       audio.srcObject = event.streams[0];
-      audio.play().catch(() => {});
+      try {
+        await audio.play();
+      } catch (e) {
+        console.log("Audio bloccato:", e);
+      }
     };
 
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    pc.addTrack(stream.getTracks()[0]);
+    dc = pc.createDataChannel("oai-events");
 
-    const dc = pc.createDataChannel("oai-events");
+    dc.onopen = () => {
+      console.log("Data channel aperto");
+
+      setTimeout(() => {
+        dc.send(JSON.stringify({
+          type: "response.create",
+          response: {
+            modalities: ["audio"],
+            instructions: "Saluta subito l’utente in italiano. Di': Benvenuto a Palazzo Cusani, sono il tuo assistente vocale. Posso aiutarti con prenotazioni, orari, eventi e informazioni sul palazzo."
+          }
+        }));
+      }, 1000);
+    };
+
+    dc.onmessage = (event) => {
+      console.log("Evento OpenAI:", event.data);
+    };
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    stream.getTracks().forEach((track) => {
+      pc.addTrack(track, stream);
+    });
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -146,14 +199,16 @@ async function startCall() {
       method: "POST",
       body: offer.sdp,
       headers: {
-        Authorization: `Bearer ${EPHEMERAL_KEY}`,
+        "Authorization": `Bearer ${EPHEMERAL_KEY}`,
         "Content-Type": "application/sdp"
       }
     });
 
     if (!sdpResponse.ok) {
-      alert("Errore Realtime: " + await sdpResponse.text());
-      btn.classList.remove("connecting");
+      const errorText = await sdpResponse.text();
+      alert("Errore Realtime: " + errorText);
+      status.innerText = "Errore realtime";
+      orb.classList.remove("connecting");
       return;
     }
 
@@ -164,20 +219,25 @@ async function startCall() {
 
     await pc.setRemoteDescription(answer);
 
-    isActive = true;
-    btn.classList.remove("connecting");
-    btn.classList.add("listening");
-
+    active = true;
+    status.innerText = "In ascolto";
+    orb.classList.remove("connecting");
+    orb.classList.add("listening");
   } catch (error) {
     console.error(error);
     alert("Errore generale: " + error.message);
-    btn.classList.remove("connecting");
+    status.innerText = "Errore";
+    orb.classList.remove("connecting");
   }
 }
 
 function stopCall() {
   if (stream) {
-    stream.getTracks().forEach(track => track.stop());
+    stream.getTracks().forEach((track) => track.stop());
+  }
+
+  if (dc) {
+    dc.close();
   }
 
   if (pc) {
@@ -186,9 +246,11 @@ function stopCall() {
 
   pc = null;
   stream = null;
-  isActive = false;
+  dc = null;
+  active = false;
 
   audio.srcObject = null;
-  btn.classList.remove("connecting");
-  btn.classList.remove("listening");
+  status.innerText = "Tocca la bolla";
+  orb.classList.remove("connecting");
+  orb.classList.remove("listening");
 }
