@@ -4,12 +4,22 @@ let audio;
 let isActive = false;
 
 const PHONE_NUMBER = "393336523536";
-const EMAIL_ADDRESS = "segreteriacircolo@cmemi.esercito.difesa.it";
+const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
+const PARKING_EMAIL = "segreteriacircolo@cmemi.esercito.difesa.it";
 
 const SCRIPT_URL = document.currentScript?.src || window.location.href;
 const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
+const LEAD_URL = new URL("api/lead", BASE_URL).toString();
 const BUTTON_IMAGE_URL = new URL("adriana-voice.svg", BASE_URL).toString();
+
+const notes = [];
+const contacts = {
+  emails: new Set(),
+  phones: new Set(),
+  names: new Set(),
+};
+let latestSummary = "";
 
 const widget = document.createElement("div");
 widget.className = "pc-voice-widget";
@@ -18,7 +28,7 @@ document.body.appendChild(widget);
 const btn = document.createElement("button");
 btn.className = "pc-voice-button";
 btn.type = "button";
-btn.setAttribute("aria-label", "Clicca per chiamare Adriana");
+btn.setAttribute("aria-label", "Clicca per parlare");
 widget.appendChild(btn);
 
 const visual = document.createElement("span");
@@ -28,12 +38,12 @@ btn.appendChild(visual);
 
 const label = document.createElement("span");
 label.className = "pc-voice-button-label";
-label.innerText = "clicca per chiamare";
+label.innerText = "clicca per parlare";
 btn.appendChild(label);
 
 const statusText = document.createElement("div");
 statusText.className = "pc-voice-status";
-statusText.innerText = "Adriana di Palazzo Cusani";
+statusText.style.display = "none";
 widget.appendChild(statusText);
 
 const actions = document.createElement("div");
@@ -52,15 +62,40 @@ whatsapp.className = "pc-voice-action pc-voice-whatsapp";
 whatsapp.style.display = "none";
 actions.appendChild(whatsapp);
 
-const email = document.createElement("a");
-email.href =
+const generalEmail = document.createElement("a");
+generalEmail.href =
   "mailto:" +
-  EMAIL_ADDRESS +
+  GENERAL_EMAIL +
   "?subject=Richiesta%20informazioni%20Palazzo%20Cusani";
-email.innerText = EMAIL_ADDRESS;
-email.className = "pc-voice-action pc-voice-email";
-email.style.display = "none";
-actions.appendChild(email);
+generalEmail.innerText = GENERAL_EMAIL;
+generalEmail.className = "pc-voice-action pc-voice-email";
+generalEmail.style.display = "none";
+actions.appendChild(generalEmail);
+
+const parkingEmail = document.createElement("a");
+parkingEmail.href =
+  "mailto:" +
+  PARKING_EMAIL +
+  "?subject=Richiesta%20parcheggio%20Palazzo%20Cusani";
+parkingEmail.innerText = PARKING_EMAIL;
+parkingEmail.className = "pc-voice-action pc-voice-email";
+parkingEmail.style.display = "none";
+actions.appendChild(parkingEmail);
+
+const recap = document.createElement("details");
+recap.className = "pc-voice-recap";
+recap.style.display = "none";
+recap.innerHTML = `
+  <summary>Riepilogo richiesta</summary>
+  <div class="pc-voice-recap-body" data-recap-body></div>
+  <button class="pc-voice-action pc-voice-email pc-voice-send" data-recap-email type="button">
+    Invia richiesta via email
+  </button>
+`;
+actions.appendChild(recap);
+
+const recapBody = recap.querySelector("[data-recap-body]");
+const recapEmail = recap.querySelector("[data-recap-email]");
 
 const style = document.createElement("style");
 style.innerHTML = `
@@ -73,42 +108,50 @@ style.innerHTML = `
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     font-family: Arial, sans-serif;
   }
 
   .pc-voice-button {
     position: relative;
-    width: 132px;
-    height: 132px;
+    width: 156px;
+    height: 170px;
     padding: 0;
     border: 0;
-    border-radius: 50%;
     cursor: pointer;
-    background: #fff;
-    overflow: hidden;
-    box-shadow: 0 18px 45px rgba(30, 18, 60, 0.28);
+    color: #172033;
+    background: transparent;
   }
 
   .pc-voice-button-visual {
     position: absolute;
-    inset: 0;
-    background-size: cover;
+    left: 50%;
+    top: 0;
+    width: 150px;
+    height: 150px;
+    transform: translateX(-50%);
+    background-size: contain;
     background-position: center;
+    background-repeat: no-repeat;
+    filter: drop-shadow(0 16px 30px rgba(92, 130, 245, 0.26));
   }
 
   .pc-voice-button-label {
     position: absolute;
     left: 50%;
-    bottom: 16px;
+    bottom: 0;
     transform: translateX(-50%);
-    width: 96px;
-    color: #ffffff;
-    font-size: 11px;
+    min-width: 126px;
+    padding: 6px 10px;
+    color: #172033;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(23, 32, 51, 0.12);
+    border-radius: 999px;
+    box-shadow: 0 8px 22px rgba(23, 32, 51, 0.12);
+    font-size: 12px;
     font-weight: 700;
     line-height: 1.15;
     text-align: center;
-    text-shadow: 0 1px 7px rgba(0, 0, 0, 0.45);
     pointer-events: none;
   }
 
@@ -132,7 +175,7 @@ style.innerHTML = `
   }
 
   .pc-voice-action {
-    max-width: min(310px, calc(100vw - 32px));
+    max-width: min(340px, calc(100vw - 32px));
     padding: 12px 18px;
     border-radius: 999px;
     color: #fff;
@@ -151,79 +194,252 @@ style.innerHTML = `
     background: #1f5f8f;
   }
 
-  .pc-voice-widget.is-active .pc-voice-button {
-    animation: pcVoicePulse 1.2s infinite;
+  .pc-voice-recap {
+    width: min(340px, calc(100vw - 32px));
+    color: #182236;
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(24, 34, 54, 0.14);
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(24, 34, 54, 0.16);
+    font-size: 13px;
   }
 
-  @keyframes pcVoicePulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.12); }
-    100% { transform: scale(1); }
+  .pc-voice-recap summary {
+    cursor: pointer;
+    padding: 11px 14px;
+    font-weight: 700;
+  }
+
+  .pc-voice-recap-body {
+    padding: 0 14px 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+  }
+
+  .pc-voice-recap .pc-voice-action {
+    display: block;
+    margin: 0 12px 12px;
+    border: 0;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .pc-voice-widget.is-active .pc-voice-button-visual {
+    animation: pcVoiceFloat 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pcVoiceFloat {
+    0% { transform: translateX(-50%) scale(1); }
+    50% { transform: translateX(-50%) scale(1.08); }
+    100% { transform: translateX(-50%) scale(1); }
   }
 `;
 document.head.appendChild(style);
+
+function showStatus(message) {
+  statusText.innerText = message;
+  statusText.style.display = "block";
+}
+
+function hideStatus() {
+  statusText.style.display = "none";
+}
 
 function showWhatsApp() {
   whatsapp.style.display = "block";
 }
 
-function showEmail() {
-  email.style.display = "block";
+function showGeneralEmail() {
+  generalEmail.style.display = "block";
 }
 
-function hideButtons() {
+function showParkingEmail() {
+  parkingEmail.style.display = "block";
+}
+
+function hideActionButtons() {
   whatsapp.style.display = "none";
-  email.style.display = "none";
+  generalEmail.style.display = "none";
+  parkingEmail.style.display = "none";
+  recap.style.display = "none";
 }
 
 function setActive(active) {
   isActive = active;
   widget.classList.toggle("is-active", active);
-  label.innerText = active ? "clicca per chiudere" : "clicca per chiamare";
-  statusText.innerText = active ? "In ascolto..." : "Adriana di Palazzo Cusani";
+  label.innerText = active ? "clicca per chiudere" : "clicca per parlare";
+  btn.setAttribute("aria-label", active ? "Clicca per chiudere" : "Clicca per parlare");
+
+  if (!active) {
+    hideStatus();
+  }
 }
 
 function stopCall() {
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
   audio?.remove();
-
   pc = null;
   stream = null;
   audio = null;
-
   setActive(false);
-  hideButtons();
+  hideActionButtons();
 }
 
-function checkTextForButtons(text) {
-  const t = text.toLowerCase();
+function rememberUserText(text) {
+  const cleaned = text.trim();
+  if (!cleaned || notes.includes(cleaned)) return;
 
-  if (
-    t.includes("email") ||
-    t.includes("e-mail") ||
-    t.includes("mail") ||
-    t.includes("indirizzo di posta")
-  ) {
-    showEmail();
+  notes.push(cleaned);
+
+  const emailMatches = cleaned.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  emailMatches.forEach((item) => contacts.emails.add(item));
+
+  const phoneMatches = cleaned.match(/(?:\+?\d[\s.-]?){7,}/g) || [];
+  phoneMatches.forEach((item) => contacts.phones.add(item.trim()));
+
+  const nameMatch = cleaned.match(/\b(?:mi chiamo|sono)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i);
+  if (nameMatch?.[1]) {
+    contacts.names.add(nameMatch[1].trim());
   }
 
-  if (
-    t.includes("prenot") ||
-    t.includes("whatsapp") ||
-    t.includes("telefono") ||
-    t.includes("contatt")
-  ) {
-    showWhatsApp();
+  updateRecap();
+}
+
+function updateRecap() {
+  if (!notes.length) return;
+
+  const names = Array.from(contacts.names).join(", ") || "non rilevato";
+  const phones = Array.from(contacts.phones).join(", ") || "non rilevato";
+  const emails = Array.from(contacts.emails).join(", ") || "non rilevato";
+  const transcript = notes.map((note) => `- ${note}`).join("\n");
+  const body =
+    `Nome: ${names}\nTelefono: ${phones}\nEmail: ${emails}\n\nRichiesta:\n${transcript}`;
+
+  latestSummary = body;
+  recapBody.textContent = body;
+  recap.style.display = "block";
+}
+
+async function sendSummaryByEmail() {
+  if (!latestSummary) {
+    alert("Non c'e ancora un riepilogo da inviare.");
+    return;
   }
+
+  recapEmail.disabled = true;
+  recapEmail.innerText = "Invio in corso...";
+
+  try {
+    const response = await fetch(LEAD_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        summary: latestSummary,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Invio non riuscito");
+    }
+
+    recapEmail.innerText = "Richiesta inviata";
+  } catch (error) {
+    alert("Errore invio email: " + error.message);
+    recapEmail.innerText = "Invia richiesta via email";
+  } finally {
+    recapEmail.disabled = false;
+  }
+}
+
+recapEmail.addEventListener("click", sendSummaryByEmail);
+
+function textLooksLikeEmailRequest(text) {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("email") ||
+    normalized.includes("e-mail") ||
+    normalized.includes("mail") ||
+    normalized.includes("indirizzo di posta") ||
+    normalized.includes("contatto email")
+  );
+}
+
+function textLooksLikeParkingRequest(text) {
+  const normalized = text.toLowerCase();
+  return normalized.includes("parcheggio") || normalized.includes("parcheggiare");
+}
+
+function textLooksLikeBookingRequest(text) {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("prenot") ||
+    normalized.includes("whatsapp") ||
+    normalized.includes("telefono") ||
+    normalized.includes("contatt")
+  );
+}
+
+function getEventText(event) {
+  if (event?.type?.includes("input_audio_transcription") && event.transcript) {
+    rememberUserText(event.transcript);
+    return event.transcript;
+  }
+
+  const textParts = [];
+
+  function collect(value) {
+    if (!value) return;
+
+    if (typeof value === "string") {
+      textParts.push(value);
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+      return;
+    }
+
+    if (typeof value === "object") {
+      collect(value.transcript);
+      collect(value.text);
+      collect(value.output_text);
+      collect(value.content);
+      collect(value.part);
+      collect(value.item);
+    }
+  }
+
+  collect(event);
+  return textParts.join(" ");
 }
 
 function handleRealtimeEvent(message) {
+  let event;
+
   try {
-    const event = JSON.parse(message.data);
-    checkTextForButtons(JSON.stringify(event));
+    event = JSON.parse(message.data);
   } catch {
-    // Ignora eventi non leggibili.
+    return;
+  }
+
+  const text = getEventText(event);
+
+  if (textLooksLikeEmailRequest(text)) {
+    showGeneralEmail();
+  }
+
+  if (textLooksLikeParkingRequest(text)) {
+    showParkingEmail();
+  }
+
+  if (textLooksLikeBookingRequest(text)) {
+    showWhatsApp();
   }
 }
 
@@ -235,7 +451,7 @@ btn.onclick = async () => {
 
   try {
     widget.classList.add("is-active");
-    statusText.innerText = "Richiesta microfono...";
+    showStatus("Richiesta microfono...");
 
     const tokenRes = await fetch(SESSION_URL, { method: "POST" });
     const data = await tokenRes.json();
@@ -264,7 +480,7 @@ btn.onclick = async () => {
     pc.onconnectionstatechange = () => {
       if (pc?.connectionState === "connected") {
         setActive(true);
-        showWhatsApp();
+        hideStatus();
       }
 
       if (["failed", "disconnected", "closed"].includes(pc?.connectionState)) {
@@ -290,7 +506,7 @@ btn.onclick = async () => {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    statusText.innerText = "Connessione ad Adriana...";
+    showStatus("Connessione...");
 
     const sdpRes = await fetch("https://api.openai.com/v1/realtime/calls", {
       method: "POST",
