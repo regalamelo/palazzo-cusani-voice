@@ -3,6 +3,7 @@ let stream;
 let audio;
 let isActive = false;
 let leadSent = false;
+let callTranscriptSent = false;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -226,6 +227,7 @@ function setActive(active) {
 }
 
 function stopCall() {
+  sendCallTranscript();
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
   audio?.remove();
@@ -363,6 +365,27 @@ async function maybeSendLead() {
   } catch (error) {
     console.warn("Lead email not sent", error);
     leadSent = false;
+  }
+}
+
+async function sendCallTranscript() {
+  if (callTranscriptSent || !notes.length) return;
+
+  callTranscriptSent = true;
+
+  try {
+    await fetch(LEAD_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        summary: getLeadSummary(),
+      }),
+    });
+  } catch (error) {
+    console.warn("Call transcript email not sent", error);
+    callTranscriptSent = false;
   }
 }
 
