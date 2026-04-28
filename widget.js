@@ -5,6 +5,8 @@ let isActive = false;
 let leadSent = false;
 let callTranscriptSent = false;
 let silenceTimer;
+let eventsChannel;
+let greeted = false;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -61,7 +63,7 @@ widget.appendChild(actions);
 const whatsapp = document.createElement("a");
 whatsapp.target = "_blank";
 whatsapp.rel = "noopener";
-whatsapp.innerText = "Invia richiesta su WhatsApp";
+whatsapp.innerText = "Conferma su WhatsApp";
 whatsapp.className = "pc-voice-action pc-voice-whatsapp";
 whatsapp.style.display = "none";
 actions.appendChild(whatsapp);
@@ -239,6 +241,8 @@ function stopCall() {
   pc = null;
   stream = null;
   audio = null;
+  eventsChannel = null;
+  greeted = false;
   setActive(false);
   hideActionButtons();
 }
@@ -437,7 +441,15 @@ function getInternalSummary() {
   return [
     "Nuova richiesta dal voice agent Palazzo Cusani",
     "",
-    getPublicSummary(),
+    `Obiettivo: ${lead.intent || "non rilevato"}`,
+    `Nome: ${lead.name || "non rilevato"}`,
+    `WhatsApp/telefono cliente: ${lead.phone || "non rilevato"}`,
+    `Email cliente: ${lead.email || "non rilevato"}`,
+    `Giorno: ${lead.day || "non rilevato"}`,
+    `Pranzo/cena: ${lead.meal || "non rilevato"}`,
+    `Ora: ${lead.time || "non rilevato"}`,
+    `Persone: ${lead.people || "non rilevato"}`,
+    `Occasione/evento: ${lead.occasion || "non rilevato"}`,
     "",
     "Trascrizione:",
     transcript || "non disponibile",
@@ -445,15 +457,15 @@ function getInternalSummary() {
 }
 
 function hasBookingDetails() {
-  return lead.intent === "prenotazione" && lead.day && lead.meal && lead.time && lead.name && lead.phone;
+  return lead.intent === "prenotazione" && lead.day && lead.meal && lead.time && lead.name;
 }
 
 function hasEventDetails() {
-  return lead.intent === "evento" && lead.occasion && lead.name && lead.phone;
+  return lead.intent === "evento" && lead.occasion && lead.name;
 }
 
 function canShowContactButtons() {
-  return hasBookingDetails() || hasEventDetails();
+  return lead.intent === "prenotazione" || lead.intent === "evento" || hasBookingDetails() || hasEventDetails();
 }
 
 function updateWhatsAppButton() {
@@ -464,12 +476,19 @@ function updateWhatsAppButton() {
 
   const title =
     lead.intent === "evento"
-      ? "Buongiorno, vorrei ricevere informazioni per organizzare un evento o un'occasione a Palazzo Cusani:"
+      ? "Buongiorno, vorrei informazioni per organizzare questa occasione a Palazzo Cusani:"
       : "Buongiorno, vorrei ricevere conferma per questa richiesta a Palazzo Cusani:";
 
   const message = [
     title,
-    getPublicSummary(),
+    lead.intent ? `Tipo richiesta: ${lead.intent}` : "",
+    lead.occasion ? `Occasione: ${lead.occasion}` : "",
+    lead.name ? `Nome: ${lead.name}` : "",
+    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
+    lead.day ? `Giorno/data: ${lead.day}` : "",
+    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
+    lead.time ? `Ora: ${lead.time}` : "",
+    lead.people ? `Persone: ${lead.people}` : "",
     "",
     "Resto in attesa di conferma o ricontatto. Grazie.",
   ]
@@ -500,7 +519,7 @@ function updateContactButtons() {
   updateWhatsAppButton();
   updateEmailButtons();
 
-  if (hasEventDetails()) {
+  if (lead.intent === "evento") {
     generalEmail.style.display = "block";
   }
 }
@@ -632,6 +651,25 @@ function getEventText(event) {
   return textParts.join(" ");
 }
 
+function askAssistantToGreet() {
+  if (!eventsChannel || greeted || eventsChannel.readyState !== "open") return;
+
+  greeted = true;
+  try {
+    eventsChannel.send(
+      JSON.stringify({
+        type: "response.create",
+        response: {
+          instructions:
+            "Presentati in modo naturale e brevissimo: 'Buongiorno, sono Adriana di Palazzo Cusani. Mi dica pure.' Poi fermati e ascolta.",
+        },
+      })
+    );
+  } catch (error) {
+    console.warn("Greeting not sent", error);
+  }
+}
+
 function handleRealtimeEvent(message) {
   let event;
 
@@ -703,7 +741,8 @@ btn.onclick = async () => {
       }
     };
 
-    const eventsChannel = pc.createDataChannel("oai-events");
+    eventsChannel = pc.createDataChannel("oai-events");
+    eventsChannel.addEventListener("open", askAssistantToGreet);
     eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
