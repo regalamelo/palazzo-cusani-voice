@@ -290,11 +290,15 @@ function updateLeadFromText(text) {
   const phoneMatch = text.match(/(?:\+?\d[\s.-]?){8,}/);
   if (phoneMatch) {
     lead.phone = phoneMatch[0].trim();
+  } else if (!lead.phone && looksLikeSpokenPhone(text)) {
+    lead.phone = cleanPhoneValue(text);
   }
 
   const nameMatch = text.match(/\b(?:mi chiamo|sono|nome e)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i);
   if (nameMatch?.[1]) {
     lead.name = cleanCapturedValue(nameMatch[1]);
+  } else if (!lead.name && looksLikeNameAnswer(text)) {
+    lead.name = cleanCapturedValue(text);
   }
 
   const peopleMatch = text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i);
@@ -323,6 +327,15 @@ function updateLeadFromText(text) {
   const timeMatch = text.match(/\b(?:alle|ore)?\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
   if (timeMatch && normalized.match(/\b(alle|ore|orario|pranzo|cena|sera|mezzogiorno)\b/)) {
     lead.time = timeMatch[2] ? `${timeMatch[1]}:${timeMatch[2]}` : timeMatch[1];
+
+    const hour = Number(timeMatch[1]);
+    if (!lead.meal && hour >= 11 && hour <= 16) {
+      lead.meal = "pranzo";
+    }
+
+    if (!lead.meal && hour >= 18 && hour <= 23) {
+      lead.meal = "cena";
+    }
   }
 
   const datePatterns = [
@@ -347,21 +360,84 @@ function cleanCapturedValue(value) {
     .trim();
 }
 
-function getLeadSummary() {
+function cleanPhoneValue(value) {
+  return value
+    .replace(/^(?:il mio|la mia)?\s*(?:numero|telefono|whatsapp|cellulare)\s*(?:e|è|:)?\s*/i, "")
+    .trim();
+}
+
+function looksLikeNameAnswer(text) {
+  const normalized = text.toLowerCase().trim();
+  if (!/^[a-zA-ZÀ-ÿ' ]{4,50}$/.test(text.trim())) return false;
+  if (normalized.split(/\s+/).length > 4) return false;
+
+  return ![
+    "prenot",
+    "tavolo",
+    "evento",
+    "mail",
+    "email",
+    "whatsapp",
+    "telefono",
+    "domani",
+    "oggi",
+    "pranzo",
+    "cena",
+    "persone",
+  ].some((word) => normalized.includes(word));
+}
+
+function looksLikeSpokenPhone(text) {
+  const normalized = text.toLowerCase();
+  const digitWords = [
+    "zero",
+    "uno",
+    "due",
+    "tre",
+    "quattro",
+    "cinque",
+    "sei",
+    "sette",
+    "otto",
+    "nove",
+  ];
+  const wordCount = digitWords.reduce(
+    (count, word) => count + (normalized.match(new RegExp(`\\b${word}\\b`, "g")) || []).length,
+    0
+  );
+
+  return (
+    normalized.includes("telefono") ||
+    normalized.includes("numero") ||
+    normalized.includes("whatsapp") ||
+    normalized.includes("cellulare") ||
+    wordCount >= 6
+  );
+}
+
+function getPublicSummary() {
+  return [
+    `Tipo richiesta: ${lead.intent || "non rilevato"}`,
+    lead.occasion ? `Occasione: ${lead.occasion}` : "",
+    lead.name ? `Nome: ${lead.name}` : "",
+    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
+    lead.email ? `Email cliente: ${lead.email}` : "",
+    lead.day ? `Giorno/data: ${lead.day}` : "",
+    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
+    lead.time ? `Ora: ${lead.time}` : "",
+    lead.people ? `Persone: ${lead.people}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getInternalSummary() {
   const transcript = notes.map((note) => `- ${note}`).join("\n");
 
   return [
     "Nuova richiesta dal voice agent Palazzo Cusani",
     "",
-    `Obiettivo: ${lead.intent || "non rilevato"}`,
-    `Nome: ${lead.name || "non rilevato"}`,
-    `WhatsApp/telefono cliente: ${lead.phone || "non rilevato"}`,
-    `Email cliente: ${lead.email || "non rilevato"}`,
-    `Giorno: ${lead.day || "non rilevato"}`,
-    `Pranzo/cena: ${lead.meal || "non rilevato"}`,
-    `Ora: ${lead.time || "non rilevato"}`,
-    `Persone: ${lead.people || "non rilevato"}`,
-    `Occasione/evento: ${lead.occasion || "non rilevato"}`,
+    getPublicSummary(),
     "",
     "Trascrizione:",
     transcript || "non disponibile",
@@ -393,14 +469,7 @@ function updateWhatsAppButton() {
 
   const message = [
     title,
-    lead.intent ? `Tipo richiesta: ${lead.intent}` : "",
-    lead.occasion ? `Occasione: ${lead.occasion}` : "",
-    lead.name ? `Nome: ${lead.name}` : "",
-    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
-    lead.day ? `Giorno/data: ${lead.day}` : "",
-    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
-    lead.time ? `Ora: ${lead.time}` : "",
-    lead.people ? `Persone: ${lead.people}` : "",
+    getPublicSummary(),
     "",
     "Resto in attesa di conferma o ricontatto. Grazie.",
   ]
@@ -424,7 +493,7 @@ function updateEmailButtons() {
     "?subject=" +
     encodeURIComponent(subject) +
     "&body=" +
-    encodeURIComponent(getLeadSummary());
+    encodeURIComponent(getPublicSummary());
 }
 
 function updateContactButtons() {
@@ -448,7 +517,7 @@ async function maybeSendLead() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        summary: getLeadSummary(),
+        summary: getInternalSummary(),
       }),
     });
   } catch (error) {
@@ -469,7 +538,7 @@ async function sendCallTranscript() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        summary: getLeadSummary(),
+        summary: getInternalSummary(),
       }),
     });
   } catch (error) {
