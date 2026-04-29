@@ -3,9 +3,12 @@ let stream;
 let audio;
 let eventsChannel;
 let silenceTimer;
+let whatsappFailsafeTimer;
 let isActive = false;
 let greeted = false;
 let callTranscriptSent = false;
+let whatsappIntentSeen = false;
+let whatsappForcedVisible = false;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -209,8 +212,11 @@ function hideActionButtons() {
 }
 
 function resetLeadState() {
+  clearWhatsAppFailsafe();
   notes.length = 0;
   callTranscriptSent = false;
+  whatsappIntentSeen = false;
+  whatsappForcedVisible = false;
 
   Object.assign(lead, {
     name: "",
@@ -250,7 +256,12 @@ function stopCall() {
   eventsChannel = null;
   greeted = false;
   setActive(false);
-  updateContactButtons();
+
+  if (hasCommercialIntent()) {
+    forceWhatsAppButton();
+  } else {
+    updateContactButtons();
+  }
 }
 
 function resetSilenceTimer() {
@@ -277,6 +288,7 @@ function rememberUserText(text) {
   notes.push(cleaned);
   resetSilenceTimer();
   updateLeadFromText(cleaned);
+  scheduleWhatsAppFailsafe();
   updateContactButtons();
 }
 
@@ -540,8 +552,15 @@ function getPublicSummary() {
 }
 
 function getWhatsappSummary() {
+  const requestLabel =
+    lead.intent === "evento"
+      ? "evento / ricorrenza"
+      : lead.intent === "prenotazione"
+        ? "prenotazione tavolo"
+        : "richiesta informazioni";
+
   return [
-    `Richiesta: ${lead.intent === "evento" ? "evento / ricorrenza" : "prenotazione tavolo"}`,
+    `Richiesta: ${requestLabel}`,
     lead.occasion ? `Occasione: ${lead.occasion}` : "",
     lead.day ? `Data: ${lead.day}` : "",
     lead.meal ? `Servizio: ${lead.meal}` : "",
@@ -589,16 +608,77 @@ function getInternalSummary() {
 }
 
 function canShowContactButtons() {
-  if (lead.intent === "prenotazione") {
-    return Boolean(lead.day && (lead.meal || lead.time) && lead.people);
-  }
-
-  if (lead.intent === "evento") {
-    const details = [lead.occasion, lead.day, lead.people, lead.name].filter(Boolean).length;
-    return details >= 3;
-  }
-
+  if (userAskedForWhatsApp()) return true;
+  if (hasCommercialIntent()) return true;
+  if (whatsappForcedVisible) return true;
   return false;
+}
+
+function hasCommercialIntent() {
+  return (
+    lead.intent === "prenotazione" ||
+    lead.intent === "evento" ||
+    notes.some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note))
+  );
+}
+
+function countConversationSignals() {
+  const text = notes.join(" ").toLowerCase();
+  const signals = [
+    lead.day || /\b(oggi|domani|dopodomani|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica|\d{1,2}[/-]\d{1,2})\b/i.test(text),
+    lead.meal || /\b(pranzo|cena|sera|stasera)\b/i.test(text),
+    lead.time || /\b(alle|ore)\s*([01]?\d|2[0-3])\b/i.test(text),
+    lead.people || /\b(\d{1,3})\s*(persone|ospiti|coperti)\b/i.test(text) || /\b(per|siamo|saremo|in)\s+\d{1,3}\b/i.test(text),
+    lead.name || /\b(mi chiamo|sono|nome|a nome di)\b/i.test(text),
+    lead.occasion || textLooksLikeEventRequest(text),
+  ];
+
+  return signals.filter(Boolean).length;
+}
+
+function userAskedForConfirmation() {
+  const text = notes.join(" ").toLowerCase();
+
+  return (
+    notes.length >= 2 &&
+    /\b(whatsapp|conferma|confermare|messaggio|invia|mandare|prenotazione|ricontatto)\b/i.test(text)
+  );
+}
+
+function userAskedForWhatsApp() {
+  const text = notes.join(" ").toLowerCase();
+  return /\b(whatsapp|wa\.me|messaggio)\b/i.test(text);
+}
+
+function scheduleWhatsAppFailsafe() {
+  if (!hasCommercialIntent() || whatsappIntentSeen || whatsappForcedVisible) return;
+
+  whatsappIntentSeen = true;
+  clearWhatsAppFailsafe();
+
+  whatsappFailsafeTimer = setTimeout(() => {
+    if (!hasCommercialIntent()) return;
+
+    forceWhatsAppButton();
+
+    if (isActive) {
+      showStatus("WhatsApp pronto per inviare la richiesta");
+    }
+  }, 9000);
+}
+
+function clearWhatsAppFailsafe() {
+  if (whatsappFailsafeTimer) {
+    clearTimeout(whatsappFailsafeTimer);
+    whatsappFailsafeTimer = null;
+  }
+}
+
+function forceWhatsAppButton() {
+  whatsappForcedVisible = true;
+  whatsapp.href = buildWhatsAppUrl();
+  whatsapp.innerText = "Invia richiesta su WhatsApp";
+  whatsapp.style.display = "block";
 }
 
 function updateWhatsAppButton() {
@@ -614,7 +694,7 @@ function updateWhatsAppButton() {
 
 function openWhatsAppWithLatestMessage(event) {
   event.preventDefault();
-  if (!canShowContactButtons()) return;
+  if (!canShowContactButtons() && !hasCommercialIntent()) return;
   window.open(buildWhatsAppUrl(), "_blank", "noopener");
 }
 
@@ -623,7 +703,7 @@ function buildWhatsAppUrl() {
     "Buongiorno,",
     getWhatsappSummary(),
     "",
-    "Resto in attesa di conferma. Grazie.",
+    "Invio questa richiesta per ricevere conferma definitiva. Grazie.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -707,8 +787,10 @@ function textLooksLikeBookingRequest(text) {
     normalized.includes("prenot") ||
     normalized.includes("riserv") ||
     normalized.includes("tavolo") ||
-    normalized.includes("pranzo") ||
-    normalized.includes("cena")
+    normalized.includes("disponibil") ||
+    normalized.includes("vorrei venire") ||
+    normalized.includes("posso venire") ||
+    normalized.includes("posto")
   );
 }
 
