@@ -345,6 +345,8 @@ function updateLeadFromText(text) {
   const occasionMatch = text.match(/\b(cresima|battesimo|compleanno|laurea|comunione|anniversario|matrimonio|meeting|festa|aziendale|conviviale|ricorrenza)\b/i);
   if (occasionMatch && lead.intent !== "prenotazione") {
     lead.occasion = occasionMatch[1];
+  } else if (lead.intent === "evento" && !lead.occasion) {
+    lead.occasion = getGenericEventOccasion(text);
   }
 
   const time = getTimeFromText(text);
@@ -374,7 +376,7 @@ function getNameFromText(text) {
     if (!match?.[1]) continue;
 
     const name = cleanCapturedValue(match[1]);
-    if (looksLikeNameAnswer(name)) {
+    if (looksLikeNameAnswer(name) && !looksLikeMisheardPeople(name)) {
       return name;
     }
   }
@@ -385,8 +387,8 @@ function getNameFromText(text) {
 function getPeopleFromText(text) {
   const trimmed = text.trim();
   const numberMatch =
-    text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti)\b/i) ||
-    text.match(/\b(?:per|siamo|saremo|in)\s+(\d{1,3})\b/i);
+    text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti|invitati|partecipanti|commensali)\b/i) ||
+    text.match(/\b(?:per|siamo|saremo|in|circa)\s+(\d{1,3})\b/i);
 
   if (numberMatch) {
     return numberMatch[1];
@@ -450,6 +452,9 @@ function getDateFromText(text) {
   const datePatterns = [
     /\b(oggi|domani|dopodomani|stasera|questa sera)\b/i,
     /\b(lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica)\b/i,
+    /\b((?:inizio|meta|metà|fine)\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
+    /\b(?:a|di|per|nel mese di)\s+((?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
+    /\b((?:sabato|domenica|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì)\s+\d{1,2}(?:\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))?)\b/i,
     /\b(\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
     /\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/i,
   ];
@@ -484,6 +489,14 @@ function looksLikeNameAnswer(text) {
   if (normalized.split(/\s+/).length > 4) return false;
 
   return ![
+    "trener",
+    "trenta",
+    "trentine",
+    "trentina",
+    "preventivo",
+    "organizzare",
+    "interessato",
+    "interessata",
     "prenot",
     "tavolo",
     "evento",
@@ -525,14 +538,42 @@ function parsePeopleFromText(text) {
     diciotto: 18,
     diciannove: 19,
     venti: 20,
+    trenta: 30,
+    trentina: 30,
+    trentine: 30,
+    trener: 30,
+    quaranta: 40,
+    cinquanta: 50,
+    sessanta: 60,
+    settanta: 70,
+    ottanta: 80,
+    novanta: 90,
+    cento: 100,
   };
 
   const words = Object.keys(numberWords).join("|");
   const match =
-    normalized.match(new RegExp(`\\b(${words})\\s+(?:persone|ospiti|coperti)\\b`, "i")) ||
+    normalized.match(new RegExp(`\\b(${words})\\s+(?:persone|ospiti|coperti|invitati|partecipanti|commensali)\\b`, "i")) ||
     normalized.match(new RegExp(`\\b(?:per|siamo|saremo|in)\\s+(${words})\\b`, "i"));
 
   return match ? numberWords[match[1].toLowerCase()] : "";
+}
+
+function getGenericEventOccasion(text) {
+  const normalized = text.toLowerCase();
+
+  if (normalized.includes("preventivo")) return "richiesta preventivo";
+  if (normalized.includes("evento")) return "evento";
+  if (normalized.includes("ricorrenza")) return "ricorrenza";
+  if (normalized.includes("cerimonia")) return "cerimonia";
+  if (normalized.includes("sala") || normalized.includes("salone")) return "sala evento";
+  if (normalized.includes("aziendale")) return "evento aziendale";
+
+  return "";
+}
+
+function looksLikeMisheardPeople(text) {
+  return /\b(trener|trenta|trentine|trentina|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)\b/i.test(text);
 }
 
 function getPublicSummary() {
@@ -546,6 +587,17 @@ function getPublicSummary() {
     lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
     lead.time ? `Ora: ${lead.time}` : "",
     lead.people ? `Persone: ${lead.people}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function getContactRequestBody() {
+  return [
+    "Buongiorno,",
+    getWhatsappSummary(),
+    "",
+    "Invio questa richiesta per ricevere conferma definitiva. Grazie.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -699,22 +751,13 @@ function openWhatsAppWithLatestMessage(event) {
 }
 
 function buildWhatsAppUrl() {
-  const message = [
-    "Buongiorno,",
-    getWhatsappSummary(),
-    "",
-    "Invio questa richiesta per ricevere conferma definitiva. Grazie.",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  return `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(message)}`;
+  return `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(getContactRequestBody())}`;
 }
 
 function updateEmailButtons() {
   const subject =
     lead.intent === "evento"
-      ? "Richiesta evento Palazzo Cusani"
+      ? "Richiesta preventivo evento Palazzo Cusani"
       : "Richiesta informazioni Palazzo Cusani";
 
   generalEmail.href =
@@ -723,7 +766,7 @@ function updateEmailButtons() {
     "?subject=" +
     encodeURIComponent(subject) +
     "&body=" +
-    encodeURIComponent(getPublicSummary());
+    encodeURIComponent(getContactRequestBody());
 }
 
 function updateContactButtons() {
@@ -797,6 +840,9 @@ function textLooksLikeBookingRequest(text) {
 function textLooksLikeEventRequest(text) {
   const normalized = text.toLowerCase();
   return (
+    normalized.includes("preventivo") ||
+    normalized.includes("organizz") ||
+    normalized.includes("cerimonia") ||
     normalized.includes("evento") ||
     normalized.includes("eventi") ||
     normalized.includes("cresima") ||
