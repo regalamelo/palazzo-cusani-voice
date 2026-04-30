@@ -4,12 +4,15 @@ let audio;
 let eventsChannel;
 let silenceTimer;
 let greetingTimer;
+let greetingUnmuteTimer;
 let whatsappFailsafeTimer;
 let isActive = false;
 let greeted = false;
 let callTranscriptSent = false;
 let whatsappIntentSeen = false;
 let whatsappForcedVisible = false;
+let privacyAccepted = false;
+let greetingMicMuted = false;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -63,6 +66,22 @@ const actions = document.createElement("div");
 actions.className = "pc-voice-actions";
 widget.appendChild(actions);
 
+const privacyBox = document.createElement("div");
+privacyBox.className = "pc-voice-privacy";
+privacyBox.style.display = "none";
+privacyBox.innerHTML = `
+  <div class="pc-voice-privacy-title">Prima di iniziare</div>
+  <label class="pc-voice-privacy-row">
+    <input type="checkbox" class="pc-voice-privacy-check" />
+    <span>Ho letto l'informativa privacy, autorizzo il trattamento di voce, trascrizione e dati forniti, e dichiaro di avere almeno 18 anni.</span>
+  </label>
+  <button type="button" class="pc-voice-privacy-start">Avvia assistente</button>
+`;
+widget.appendChild(privacyBox);
+
+const privacyCheck = privacyBox.querySelector(".pc-voice-privacy-check");
+const privacyStart = privacyBox.querySelector(".pc-voice-privacy-start");
+
 const whatsapp = createAction("Invia richiesta su WhatsApp", "pc-voice-whatsapp");
 whatsapp.href = "#";
 whatsapp.target = "_blank";
@@ -97,8 +116,8 @@ style.innerHTML = `
 
   .pc-voice-button {
     position: relative;
-    width: min(430px, calc(100vw - 24px));
-    height: min(455px, calc(100vw + 1px));
+    width: min(420px, calc(100vw - 24px));
+    height: min(465px, calc(100vw + 21px));
     padding: 0;
     border: 0;
     cursor: pointer;
@@ -106,7 +125,7 @@ style.innerHTML = `
     background: transparent;
   }
 
-    .pc-voice-button-visual {
+  .pc-voice-button-visual {
     position: absolute;
     left: 50%;
     top: 0;
@@ -118,7 +137,6 @@ style.innerHTML = `
     background-repeat: no-repeat;
     filter: none;
   }
-
 
   .pc-voice-button-label {
     position: absolute;
@@ -151,6 +169,47 @@ style.innerHTML = `
     text-align: center;
   }
 
+  .pc-voice-privacy {
+    max-width: min(360px, calc(100vw - 32px));
+    padding: 14px;
+    color: #172033;
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(23, 32, 51, 0.12);
+    border-radius: 12px;
+    box-shadow: 0 14px 38px rgba(23, 32, 51, 0.16);
+    font-size: 12px;
+    line-height: 1.35;
+  }
+
+  .pc-voice-privacy-title {
+    margin-bottom: 8px;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .pc-voice-privacy-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .pc-voice-privacy-check {
+    margin-top: 2px;
+  }
+
+  .pc-voice-privacy-start {
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px 14px;
+    border: 0;
+    border-radius: 999px;
+    color: #fff;
+    background: #172033;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
   .pc-voice-actions {
     display: flex;
     flex-direction: column;
@@ -179,12 +238,12 @@ style.innerHTML = `
   }
 
   .pc-voice-widget.is-active .pc-voice-button-visual {
-    animation: pcVoiceFloat 1.4s ease-in-out infinite;
+    animation: pcVoiceFloat 2.4s ease-in-out infinite;
   }
 
   @keyframes pcVoiceFloat {
     0% { transform: translateX(-50%) scale(1); }
-    50% { transform: translateX(-50%) scale(1.08); }
+    50% { transform: translateX(-50%) scale(1.035); }
     100% { transform: translateX(-50%) scale(1); }
   }
 `;
@@ -211,6 +270,14 @@ function hideActionButtons() {
   whatsapp.style.display = "none";
   generalEmail.style.display = "none";
   defenseEmail.style.display = "none";
+}
+
+function showPrivacyBox() {
+  privacyBox.style.display = "block";
+}
+
+function hidePrivacyBox() {
+  privacyBox.style.display = "none";
 }
 
 function resetLeadState() {
@@ -249,6 +316,7 @@ function setActive(active) {
 function stopCall() {
   clearSilenceTimer();
   clearGreetingTimer();
+  unmuteMicAfterGreeting();
   sendCallTranscript();
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
@@ -283,6 +351,7 @@ function clearSilenceTimer() {
     silenceTimer = null;
   }
 }
+
 function scheduleAssistantGreeting(attempt = 0) {
   clearGreetingTimer();
 
@@ -297,7 +366,7 @@ function scheduleAssistantGreeting(attempt = 0) {
     if (attempt < 8) {
       scheduleAssistantGreeting(attempt + 1);
     }
-  }, attempt === 0 ? 1400 : 250);
+  }, attempt === 0 ? 1600 : 250);
 }
 
 function clearGreetingTimer() {
@@ -344,7 +413,7 @@ function updateLeadFromText(text) {
   }
 
   const capturedName = getNameFromText(text);
-  if (capturedName) {
+  if (capturedName && (!lead.name || textLooksLikeExplicitName(text))) {
     lead.name = capturedName;
   } else if (!lead.name && looksLikeNameAnswer(text)) {
     lead.name = cleanCapturedValue(text);
@@ -392,9 +461,10 @@ function updateLeadFromText(text) {
 
 function getNameFromText(text) {
   const patterns = [
-    /\b(?:mi chiamo|io sono|sono|yo soy|soy)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i,
-    /\b(?:il\s+|la\s+|el\s+)?nome\s+(?:e|è|di)\s+([a-zA-ZÀ-ÿ' ]{2,40})/i,
-    /\ba nome di\s+([a-zA-ZÀ-ÿ' ]{2,40})/i,
+    /\b(?:mi chiamo|io sono|sono|yo soy|soy)\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
+    /\b(?:il mio|la mia|mio|mia)\s+nome\s+(?:e|è|di)\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
+    /\b(?:il\s+|la\s+|el\s+)?nome\s+(?:e|è|di)\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
+    /\ba nome di\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
   ];
 
   for (const pattern of patterns) {
@@ -408,6 +478,10 @@ function getNameFromText(text) {
   }
 
   return "";
+}
+
+function textLooksLikeExplicitName(text) {
+  return /\b(mi chiamo|io sono|sono|nome|a nome di|yo soy|soy)\b/i.test(text);
 }
 
 function getPeopleFromText(text) {
@@ -537,6 +611,11 @@ function looksLikeNameAnswer(text) {
     "persone",
     "numero",
     "quante",
+    "adriana",
+    "palazzo",
+    "cusani",
+    "assistente",
+    "dica pure",
   ].some((word) => normalized.includes(word));
 }
 
@@ -619,6 +698,8 @@ function getPublicSummary() {
 }
 
 function getContactRequestBody() {
+  refreshLeadFromNotes();
+
   return [
     "Buongiorno,",
     getWhatsappSummary(),
@@ -627,6 +708,10 @@ function getContactRequestBody() {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function refreshLeadFromNotes() {
+  notes.forEach(updateLeadFromText);
 }
 
 function getWhatsappSummary() {
@@ -961,31 +1046,51 @@ function askAssistantToGreet() {
   if (!eventsChannel || greeted || eventsChannel.readyState !== "open") return;
 
   greeted = true;
-
-  const micTracks = stream?.getAudioTracks?.() || [];
-  micTracks.forEach((track) => {
-    track.enabled = false;
-  });
+  muteMicForGreeting(6000);
 
   try {
     eventsChannel.send(
       JSON.stringify({
         type: "response.create",
         response: {
+          modalities: ["audio"],
           instructions:
-            "Di' solo: 'Palazzo Cusani, sono Adriana. Dica pure.'",
+            "Apertura della chiamata. Pronuncia ESATTAMENTE e SOLO questa frase: 'Sono Adriana di Palazzo Cusani. Mi dica pure.' Non aggiungere nessuna parola prima o dopo. Vietato dire: certamente, certo, ok, va bene, perfetto.",
         },
       })
     );
   } catch (error) {
     console.warn("Greeting not sent", error);
+    unmuteMicAfterGreeting();
   }
+}
 
-  setTimeout(() => {
-    micTracks.forEach((track) => {
-      track.enabled = true;
-    });
-  }, 3200);
+function muteMicForGreeting(timeout = 7000) {
+  greetingMicMuted = true;
+  stream?.getAudioTracks?.().forEach((track) => {
+    track.enabled = false;
+  });
+
+  clearGreetingUnmuteTimer();
+  greetingUnmuteTimer = setTimeout(unmuteMicAfterGreeting, timeout);
+}
+
+function unmuteMicAfterGreeting() {
+  clearGreetingUnmuteTimer();
+
+  if (!greetingMicMuted) return;
+
+  greetingMicMuted = false;
+  stream?.getAudioTracks?.().forEach((track) => {
+    track.enabled = true;
+  });
+}
+
+function clearGreetingUnmuteTimer() {
+  if (greetingUnmuteTimer) {
+    clearTimeout(greetingUnmuteTimer);
+    greetingUnmuteTimer = null;
+  }
 }
 
 function handleRealtimeEvent(message) {
@@ -995,6 +1100,16 @@ function handleRealtimeEvent(message) {
     event = JSON.parse(message.data);
   } catch {
     return;
+  }
+
+  if (
+    greetingMicMuted &&
+    [
+      "response.audio.done",
+      "response.output_audio.done",
+    ].includes(event?.type)
+  ) {
+    unmuteMicAfterGreeting();
   }
 
   const text = getEventText(event);
@@ -1015,9 +1130,26 @@ function handleRealtimeEvent(message) {
   }
 }
 
+privacyStart.onclick = () => {
+  if (!privacyCheck.checked) {
+    alert("Per iniziare deve accettare privacy e dichiarazione di eta.");
+    return;
+  }
+
+  privacyAccepted = true;
+  hidePrivacyBox();
+  btn.click();
+};
+
 btn.onclick = async () => {
   if (isActive) {
     stopCall();
+    return;
+  }
+
+  if (!privacyAccepted) {
+    hideStatus();
+    showPrivacyBox();
     return;
   }
 
@@ -1073,6 +1205,8 @@ btn.onclick = async () => {
         autoGainControl: true,
       },
     });
+
+    muteMicForGreeting(9000);
 
     stream.getTracks().forEach((track) => {
       pc.addTrack(track, stream);
