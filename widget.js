@@ -21,6 +21,7 @@ let lastResponseAt = 0;
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
 const PARKING_EMAIL = "segreteriacircolo@cmemi.esercito.difesa.it";
+const AMBIENCE_ENABLED = false;
 const AMBIENCE_PREVIEW_VOLUME = 0.22;
 const AMBIENCE_CALL_VOLUME = 0.07;
 const AMBIENCE_DUCK_VOLUME = 0.025;
@@ -270,6 +271,8 @@ function hideActions() {
 }
 
 function startAmbience(volume = AMBIENCE_PREVIEW_VOLUME) {
+  if (!AMBIENCE_ENABLED) return;
+
   if (ambienceAudio) {
     ambienceAudio.play().catch(() => {});
     fadeAmbience(volume, 0.25);
@@ -450,7 +453,16 @@ function requestAssistantResponse(text) {
   markResponse(key);
 
   try {
-    eventsChannel.send(JSON.stringify({ type: "response.create" }));
+    eventsChannel.send(JSON.stringify({
+      type: "response.create",
+      response: {
+        instructions:
+          `L'utente ha detto esattamente: "${key}". Rispondi solo a questa frase. ` +
+          "Non assumere che voglia prenotare se non lo dice chiaramente. " +
+          "Se saluta soltanto, rispondi solo: 'Mi dica pure.' " +
+          "Se chiede di cosa ti occupi o cosa puoi fare, spiega in una frase che aiuti con informazioni su Palazzo Cusani, tavoli, eventi, orari, contatti, foresteria e parcheggio.",
+      },
+    }));
   } catch (error) {
     responseInProgress = false;
     console.warn("Assistant response not sent", error);
@@ -522,36 +534,37 @@ function eventHasFinalUserTranscript(event) {
 }
 
 function getEventText(event) {
-  const parts = [];
+  const parts = [
+    event?.transcript,
+    event?.text,
+    event?.item?.transcript,
+    event?.item?.formatted?.transcript,
+  ];
 
-  function collect(value) {
+  function collectContent(value) {
     if (!value) return;
     if (typeof value === "string") {
       parts.push(value);
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach(collect);
+      value.forEach(collectContent);
       return;
     }
     if (typeof value === "object") {
-      collect(value.transcript);
-      collect(value.text);
-      collect(value.output_text);
-      collect(value.content);
-      collect(value.item);
+      collectContent(value.transcript);
+      collectContent(value.text);
     }
   }
 
-  collect(event?.transcript);
-  if (event?.item?.role === "user") collect(event.item);
-  if (event?.role === "user") collect(event);
+  collectContent(event?.content);
+  collectContent(event?.item?.content);
   return cleanText(parts.join(" "));
 }
 
 function rememberUserText(text) {
   const cleaned = cleanText(text);
-  if (!cleaned || notes.includes(cleaned)) return;
+  if (!textLooksMeaningful(cleaned) || notes.includes(cleaned)) return;
 
   notes.push(cleaned);
   resetSilenceTimer();
@@ -718,6 +731,10 @@ function cleanText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function getUsefulNotes() {
+  return notes.filter(textLooksMeaningful);
+}
+
 function cleanCapturedValue(value) {
   return cleanText(value)
     .replace(/\b(?:e|per|vorrei|voglio|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi).*$/i, "")
@@ -739,11 +756,17 @@ function looksLikeNameAnswer(text) {
 function textLooksMeaningful(text) {
   const cleaned = cleanText(text).toLowerCase();
   if (!cleaned) return false;
+  if (containsUnsupportedScript(cleaned)) return false;
   if (!/[a-zA-ZÀ-ÿ0-9]/.test(cleaned)) return false;
   if (/^(eh|e|uh|um|mmm|mh|ah|oh)$/i.test(cleaned)) return false;
+  if (/^(ciao|salve|buonasera|buongiorno|buongiorno adriana|ciao adriana)$/i.test(cleaned)) return true;
   if (/\b(silenzio|rumore|rumori|musica|sottofondo|incomprensibile|inaudible|noise)\b/i.test(cleaned)) return false;
   if (/\b(sono adriana|adriana di palazzo cusani|mi dica pure|pronto c'e ancora|pronto c'è ancora)\b/i.test(cleaned)) return false;
   return true;
+}
+
+function containsUnsupportedScript(text) {
+  return /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff]/.test(text);
 }
 
 function textLooksLikeAdditionalNote(text) {
@@ -751,7 +774,7 @@ function textLooksLikeAdditionalNote(text) {
 }
 
 function getCustomerNotes() {
-  return [...new Set(notes.filter(textLooksLikeAdditionalNote).map(cleanText))].join("; ");
+  return [...new Set(getUsefulNotes().filter(textLooksLikeAdditionalNote).map(cleanText))].join("; ");
 }
 
 function getGenericEventOccasion(text) {
@@ -795,11 +818,11 @@ function textLooksLikeForesteriaRequest(text) {
 }
 
 function hasCommercialIntent() {
-  return lead.intent === "prenotazione" || lead.intent === "evento" || notes.some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note));
+  return lead.intent === "prenotazione" || lead.intent === "evento" || getUsefulNotes().some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note));
 }
 
 function canShowContactButtons() {
-  return whatsappForcedVisible || hasCommercialIntent() || notes.join(" ").toLowerCase().includes("whatsapp");
+  return whatsappForcedVisible || hasCommercialIntent() || getUsefulNotes().join(" ").toLowerCase().includes("whatsapp");
 }
 
 function updateContactButtons() {
@@ -851,7 +874,7 @@ function buildWhatsAppUrl() {
 }
 
 function getContactRequestBody() {
-  notes.forEach(updateLeadFromText);
+  getUsefulNotes().forEach(updateLeadFromText);
 
   return [
     "Buongiorno,",
@@ -890,6 +913,8 @@ function getMissingFields() {
 }
 
 function getInternalSummary() {
+  const usefulNotes = getUsefulNotes();
+
   return [
     "Nuova richiesta dal voice agent Palazzo Cusani",
     "",
@@ -904,12 +929,12 @@ function getInternalSummary() {
     `Occasione/evento: ${lead.occasion || "non rilevato"}`,
     "",
     "Trascrizione:",
-    notes.map((note) => `- ${note}`).join("\n") || "non disponibile",
+    usefulNotes.map((note) => `- ${note}`).join("\n") || "non disponibile",
   ].join("\n");
 }
 
 async function sendCallTranscript() {
-  if (transcriptSent || !notes.length) return;
+  if (transcriptSent || !getUsefulNotes().length) return;
   transcriptSent = true;
 
   try {
