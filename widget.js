@@ -9,6 +9,10 @@ let callTranscriptSent = false;
 let whatsappIntentSeen = false;
 let whatsappForcedVisible = false;
 let privacyAccepted = false;
+let assistantResponseInProgress = false;
+let lastAssistantRequestText = "";
+let lastAssistantRequestAt = 0;
+let assistantResponseResetTimer = null;
 let ambienceContext = null;
 let ambienceGain = null;
 let ambienceNodes = [];
@@ -421,6 +425,8 @@ function handleAmbienceForRealtimeEvent(event) {
     type.includes("response.done") ||
     type.includes("output_audio_buffer.stopped")
   ) {
+    assistantResponseInProgress = false;
+    clearAssistantResponseResetTimer();
     restoreRestaurantAmbience(type.includes("speech_stopped") ? 500 : 900);
     return;
   }
@@ -431,8 +437,11 @@ function handleAmbienceForRealtimeEvent(event) {
     type.includes("output_audio_buffer.started") ||
     assistantRole
   ) {
+    assistantResponseInProgress = true;
     duckRestaurantAmbience();
+    return;
   }
+
 }
 
 function createRoomTone() {
@@ -618,6 +627,7 @@ function setActive(active) {
 
 function stopCall() {
   clearSilenceTimer();
+  clearAssistantResponseResetTimer();
   stopRestaurantAmbience();
   sendCallTranscript();
   pc?.close();
@@ -627,6 +637,9 @@ function stopCall() {
   stream = null;
   audio = null;
   eventsChannel = null;
+  assistantResponseInProgress = false;
+  lastAssistantRequestText = "";
+  lastAssistantRequestAt = 0;
   setActive(false);
 
   if (hasCommercialIntent()) {
@@ -1443,6 +1456,67 @@ function getEventText(event) {
   return textParts.join(" ");
 }
 
+function eventHasFinalUserTranscript(event) {
+  const type = event?.type || "";
+
+  return (
+    type.includes("input_audio_transcription.completed") ||
+    type.includes("conversation.item.input_audio_transcription.completed")
+  );
+}
+
+function textLooksLikeMeaningfulSpeech(text) {
+  const cleaned = cleanText(text).toLowerCase();
+
+  if (!cleaned) return false;
+  if (!/[a-zA-ZÀ-ÿ0-9]/.test(cleaned)) return false;
+  if (/^\W+$/.test(cleaned)) return false;
+  if (/^(eh|e|uh|um|mmm|mh|ah|oh)$/i.test(cleaned)) return false;
+  if (/\b(silenzio|rumore|rumori|musica|sottofondo|incomprensibile|non udibile|inaudible|noise)\b/i.test(cleaned)) {
+    return false;
+  }
+
+  return true;
+}
+
+function clearAssistantResponseResetTimer() {
+  if (assistantResponseResetTimer) {
+    clearTimeout(assistantResponseResetTimer);
+    assistantResponseResetTimer = null;
+  }
+}
+
+function requestAssistantResponse(text) {
+  const cleaned = cleanText(text);
+  const now = Date.now();
+
+  if (!eventsChannel || eventsChannel.readyState !== "open") return;
+  if (!textLooksLikeMeaningfulSpeech(cleaned)) return;
+  if (assistantResponseInProgress) return;
+  if (cleaned === lastAssistantRequestText && now - lastAssistantRequestAt < 5000) return;
+  if (now - lastAssistantRequestAt < 900) return;
+
+  lastAssistantRequestText = cleaned;
+  lastAssistantRequestAt = now;
+  assistantResponseInProgress = true;
+  clearAssistantResponseResetTimer();
+  assistantResponseResetTimer = setTimeout(() => {
+    assistantResponseInProgress = false;
+    assistantResponseResetTimer = null;
+  }, 12000);
+
+  try {
+    eventsChannel.send(
+      JSON.stringify({
+        type: "response.create",
+      })
+    );
+  } catch (error) {
+    assistantResponseInProgress = false;
+    console.warn("Assistant response not requested", error);
+  }
+}
+
 function handleRealtimeEvent(message) {
   let event;
 
@@ -1456,6 +1530,7 @@ function handleRealtimeEvent(message) {
 
   const text = getEventText(event);
   if (!text) return;
+  if (!eventHasFinalUserTranscript(event)) return;
 
   rememberUserText(text);
 
@@ -1470,6 +1545,8 @@ function handleRealtimeEvent(message) {
   if (textLooksLikeForesteriaRequest(text)) {
     showDefenseEmail("foresteria");
   }
+
+  requestAssistantResponse(text);
 }
 
 privacyStart.onclick = () => {
@@ -1497,8 +1574,7 @@ btn.onclick = async () => {
   }
 
   try {
-    startRestaurantAmbience();
-    setRestaurantAmbienceVolume(AMBIENCE_CALL_VOLUME, 0.8);
+    stopRestaurantAmbience();
     resetLeadState();
     widget.classList.add("is-active");
     showStatus("Richiesta microfono...");
@@ -1521,6 +1597,7 @@ btn.onclick = async () => {
     audio = document.createElement("audio");
     audio.autoplay = true;
     audio.playsInline = true;
+    audio.volume = 1;
     document.body.appendChild(audio);
 
     pc.ontrack = (event) => {
@@ -1530,7 +1607,6 @@ btn.onclick = async () => {
     pc.onconnectionstatechange = () => {
       if (pc?.connectionState === "connected") {
         setActive(true);
-        setRestaurantAmbienceVolume(AMBIENCE_CALL_VOLUME, 0.6);
         hideStatus();
         resetSilenceTimer();
       }
