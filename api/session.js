@@ -60,7 +60,6 @@ export default async function handler(req, res) {
             },
             output: {
               voice: "marin",
-              speed: 0.92,
             },
           },
         },
