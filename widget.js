@@ -1,33 +1,28 @@
 let pc;
 let stream;
-let audio;
+let outputAudio;
 let eventsChannel;
 let silenceTimer;
-let whatsappFailsafeTimer;
+let idleTimer;
+let responseResetTimer;
+let ambienceAudio;
+let ambienceFadeTimer;
 let isActive = false;
-let callTranscriptSent = false;
-let whatsappIntentSeen = false;
-let whatsappForcedVisible = false;
 let privacyAccepted = false;
-let assistantResponseInProgress = false;
-let lastAssistantRequestText = "";
-let lastAssistantRequestAt = 0;
-let assistantResponseResetTimer = null;
-let ambienceContext = null;
-let ambienceGain = null;
-let ambienceNodes = [];
-let ambienceTimers = [];
-let ambienceDuckTimer = null;
-let ambienceAudio = null;
-let ambienceAudioFadeTimer = null;
-
-const AMBIENCE_PREVIEW_VOLUME = 0.14;
-const AMBIENCE_CALL_VOLUME = 0.028;
-const AMBIENCE_DUCK_VOLUME = 0.003;
+let greetingSent = false;
+let idlePromptSent = false;
+let responseInProgress = false;
+let transcriptSent = false;
+let whatsappForcedVisible = false;
+let lastResponseKey = "";
+let lastResponseAt = 0;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
 const PARKING_EMAIL = "segreteriacircolo@cmemi.esercito.difesa.it";
+const AMBIENCE_PREVIEW_VOLUME = 0.22;
+const AMBIENCE_CALL_VOLUME = 0.07;
+const AMBIENCE_DUCK_VOLUME = 0.025;
 
 const SCRIPT_URL = document.currentScript?.src || window.location.href;
 const BASE_URL = new URL("./", SCRIPT_URL);
@@ -74,10 +69,6 @@ statusText.className = "pc-voice-status";
 statusText.style.display = "none";
 widget.appendChild(statusText);
 
-const actions = document.createElement("div");
-actions.className = "pc-voice-actions";
-widget.appendChild(actions);
-
 const privacyBox = document.createElement("div");
 privacyBox.className = "pc-voice-privacy";
 privacyBox.style.display = "none";
@@ -94,6 +85,10 @@ widget.appendChild(privacyBox);
 const privacyCheck = privacyBox.querySelector(".pc-voice-privacy-check");
 const privacyStart = privacyBox.querySelector(".pc-voice-privacy-start");
 
+const actions = document.createElement("div");
+actions.className = "pc-voice-actions";
+widget.appendChild(actions);
+
 const whatsapp = createAction("Invia richiesta su WhatsApp", "pc-voice-whatsapp");
 whatsapp.href = "#";
 whatsapp.target = "_blank";
@@ -105,10 +100,7 @@ const generalEmail = createAction(GENERAL_EMAIL, "pc-voice-email");
 actions.appendChild(generalEmail);
 
 const defenseEmail = createAction(PARKING_EMAIL, "pc-voice-email");
-defenseEmail.href =
-  "mailto:" +
-  PARKING_EMAIL +
-  "?subject=Richiesta%20Palazzo%20Cusani";
+defenseEmail.href = `mailto:${PARKING_EMAIL}?subject=Richiesta%20Palazzo%20Cusani`;
 actions.appendChild(defenseEmail);
 
 const style = document.createElement("style");
@@ -147,7 +139,17 @@ style.innerHTML = `
     background-size: contain;
     background-position: 50% 50%;
     background-repeat: no-repeat;
-    filter: none;
+  }
+
+  .pc-voice-button-label,
+  .pc-voice-status {
+    color: #172033;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(23, 32, 51, 0.12);
+    border-radius: 999px;
+    box-shadow: 0 8px 22px rgba(23, 32, 51, 0.12);
+    font-weight: 700;
+    text-align: center;
   }
 
   .pc-voice-button-label {
@@ -157,28 +159,15 @@ style.innerHTML = `
     transform: translateX(-50%);
     min-width: 150px;
     padding: 8px 14px;
-    color: #172033;
-    background: rgba(255, 255, 255, 0.94);
-    border: 1px solid rgba(23, 32, 51, 0.12);
-    border-radius: 999px;
-    box-shadow: 0 8px 22px rgba(23, 32, 51, 0.12);
     font-size: 13px;
-    font-weight: 700;
     line-height: 1.15;
-    text-align: center;
     pointer-events: none;
   }
 
   .pc-voice-status {
-    max-width: 260px;
+    max-width: 270px;
     padding: 7px 12px;
-    color: #2d2438;
-    background: rgba(255, 255, 255, 0.94);
-    border: 1px solid rgba(30, 18, 60, 0.12);
-    border-radius: 999px;
-    box-shadow: 0 8px 24px rgba(30, 18, 60, 0.12);
     font-size: 12px;
-    text-align: center;
   }
 
   .pc-voice-privacy {
@@ -241,13 +230,8 @@ style.innerHTML = `
     box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
   }
 
-  .pc-voice-whatsapp {
-    background: #25D366;
-  }
-
-  .pc-voice-email {
-    background: #1f5f8f;
-  }
+  .pc-voice-whatsapp { background: #25d366; }
+  .pc-voice-email { background: #1f5f8f; }
 
   .pc-voice-widget.is-active .pc-voice-button-visual {
     animation: pcVoiceFloat 2.4s ease-in-out infinite;
@@ -278,30 +262,16 @@ function hideStatus() {
   statusText.style.display = "none";
 }
 
-function hideActionButtons() {
+function hideActions() {
   whatsapp.style.display = "none";
   generalEmail.style.display = "none";
   defenseEmail.style.display = "none";
 }
 
-function showPrivacyBox() {
-  privacyBox.style.display = "block";
-}
-
-function hidePrivacyBox() {
-  privacyBox.style.display = "none";
-}
-
-function startRestaurantAmbience() {
+function startAmbience(volume = AMBIENCE_PREVIEW_VOLUME) {
   if (ambienceAudio) {
     ambienceAudio.play().catch(() => {});
-    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.3);
-    return;
-  }
-
-  if (ambienceContext) {
-    ambienceContext.resume?.();
-    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.3);
+    fadeAmbience(volume, 0.25);
     return;
   }
 
@@ -309,296 +279,67 @@ function startRestaurantAmbience() {
   ambienceAudio.loop = true;
   ambienceAudio.preload = "auto";
   ambienceAudio.volume = 0;
-
-  ambienceAudio
-    .play()
-    .then(() => {
-      setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.8);
-    })
-    .catch(() => {
-      ambienceAudio = null;
-      startGeneratedRestaurantAmbience();
-    });
+  ambienceAudio.play().then(() => fadeAmbience(volume, 0.8)).catch(() => {
+    ambienceAudio = null;
+  });
 }
 
-function startGeneratedRestaurantAmbience() {
-  if (ambienceContext) {
-    ambienceContext.resume?.();
-    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.3);
-    return;
-  }
-
-  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  if (!AudioContextClass) return;
-
-  try {
-    ambienceContext = new AudioContextClass();
-    ambienceGain = ambienceContext.createGain();
-    ambienceGain.gain.setValueAtTime(0.0001, ambienceContext.currentTime);
-    ambienceGain.gain.linearRampToValueAtTime(AMBIENCE_PREVIEW_VOLUME, ambienceContext.currentTime + 0.8);
-    ambienceGain.connect(ambienceContext.destination);
-
-    createRoomTone();
-    createSoftMurmur();
-    scheduleSoftClink();
-  } catch (error) {
-    console.warn("Restaurant ambience not available", error);
-    stopRestaurantAmbience();
-  }
-}
-
-function setRestaurantAmbienceVolume(volume, seconds = 0.25) {
-  if (ambienceAudio) {
-    fadeRestaurantAudioTo(volume, seconds);
-  }
-
-  if (!ambienceContext || !ambienceGain) return;
-
-  const now = ambienceContext.currentTime;
-  ambienceGain.gain.cancelScheduledValues(now);
-  ambienceGain.gain.setValueAtTime(ambienceGain.gain.value, now);
-  ambienceGain.gain.linearRampToValueAtTime(volume, now + seconds);
-}
-
-function fadeRestaurantAudioTo(volume, seconds = 0.25) {
+function fadeAmbience(volume, seconds = 0.25) {
   if (!ambienceAudio) return;
+  if (ambienceFadeTimer) clearInterval(ambienceFadeTimer);
 
-  if (ambienceAudioFadeTimer) {
-    clearInterval(ambienceAudioFadeTimer);
-    ambienceAudioFadeTimer = null;
-  }
-
-  const startVolume = ambienceAudio.volume;
-  const targetVolume = Math.max(0, Math.min(1, volume));
-  const startedAt = performance.now();
+  const from = ambienceAudio.volume;
+  const to = Math.max(0, Math.min(1, volume));
+  const start = performance.now();
   const duration = Math.max(80, seconds * 1000);
 
-  ambienceAudioFadeTimer = setInterval(() => {
+  ambienceFadeTimer = setInterval(() => {
     if (!ambienceAudio) {
-      clearInterval(ambienceAudioFadeTimer);
-      ambienceAudioFadeTimer = null;
+      clearInterval(ambienceFadeTimer);
+      ambienceFadeTimer = null;
       return;
     }
 
-    const progress = Math.min(1, (performance.now() - startedAt) / duration);
-    ambienceAudio.volume = startVolume + (targetVolume - startVolume) * progress;
+    const progress = Math.min(1, (performance.now() - start) / duration);
+    ambienceAudio.volume = from + (to - from) * progress;
 
     if (progress >= 1) {
-      clearInterval(ambienceAudioFadeTimer);
-      ambienceAudioFadeTimer = null;
+      clearInterval(ambienceFadeTimer);
+      ambienceFadeTimer = null;
     }
   }, 40);
 }
 
-function duckRestaurantAmbience() {
-  if (!ambienceContext && !ambienceAudio) return;
-
-  if (ambienceDuckTimer) {
-    clearTimeout(ambienceDuckTimer);
-    ambienceDuckTimer = null;
-  }
-
-  setRestaurantAmbienceVolume(AMBIENCE_DUCK_VOLUME, 0.12);
+function duckAmbience() {
+  fadeAmbience(AMBIENCE_DUCK_VOLUME, 0.12);
 }
 
-function restoreRestaurantAmbience(delay = 700) {
-  if (!ambienceContext && !ambienceAudio) return;
-
-  if (ambienceDuckTimer) {
-    clearTimeout(ambienceDuckTimer);
-  }
-
-  ambienceDuckTimer = setTimeout(() => {
-    if (!ambienceContext && !ambienceAudio) return;
-    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.6);
-    ambienceDuckTimer = null;
-  }, delay);
+function restoreAmbience() {
+  if (isActive) fadeAmbience(AMBIENCE_CALL_VOLUME, 0.45);
 }
 
-function handleAmbienceForRealtimeEvent(event) {
-  const type = event?.type || "";
-  const assistantRole = event?.item?.role === "assistant" || event?.response?.role === "assistant";
-
-  if (
-    type.includes("speech_stopped") ||
-    type.includes("response.audio.done") ||
-    type.includes("response.done") ||
-    type.includes("output_audio_buffer.stopped")
-  ) {
-    assistantResponseInProgress = false;
-    clearAssistantResponseResetTimer();
-    restoreRestaurantAmbience(type.includes("speech_stopped") ? 500 : 900);
-    return;
+function stopAmbience() {
+  if (ambienceFadeTimer) {
+    clearInterval(ambienceFadeTimer);
+    ambienceFadeTimer = null;
   }
 
-  if (
-    type.includes("speech_started") ||
-    type.includes("response.audio.delta") ||
-    type.includes("output_audio_buffer.started") ||
-    assistantRole
-  ) {
-    assistantResponseInProgress = true;
-    duckRestaurantAmbience();
-    return;
-  }
-
-}
-
-function createRoomTone() {
-  const seconds = 2;
-  const sampleRate = ambienceContext.sampleRate;
-  const buffer = ambienceContext.createBuffer(1, sampleRate * seconds, sampleRate);
-  const data = buffer.getChannelData(0);
-  let lastValue = 0;
-
-  for (let i = 0; i < data.length; i += 1) {
-    lastValue = lastValue * 0.985 + (Math.random() * 2 - 1) * 0.015;
-    data[i] = lastValue * 0.42;
-  }
-
-  const source = ambienceContext.createBufferSource();
-  const lowpass = ambienceContext.createBiquadFilter();
-  const highpass = ambienceContext.createBiquadFilter();
-  const gain = ambienceContext.createGain();
-
-  source.buffer = buffer;
-  source.loop = true;
-  highpass.type = "highpass";
-  highpass.frequency.value = 120;
-  lowpass.type = "lowpass";
-  lowpass.frequency.value = 1450;
-  gain.gain.value = 0.34;
-
-  source.connect(highpass);
-  highpass.connect(lowpass);
-  lowpass.connect(gain);
-  gain.connect(ambienceGain);
-  source.start();
-
-  ambienceNodes.push(source, lowpass, highpass, gain);
-}
-
-function createSoftMurmur() {
-  [185, 245, 310].forEach((frequency, index) => {
-    const oscillator = ambienceContext.createOscillator();
-    const filter = ambienceContext.createBiquadFilter();
-    const gain = ambienceContext.createGain();
-
-    oscillator.type = index === 1 ? "triangle" : "sine";
-    oscillator.frequency.value = frequency;
-    filter.type = "bandpass";
-    filter.frequency.value = frequency * 1.7;
-    filter.Q.value = 0.7;
-    gain.gain.value = 0.0026;
-
-    oscillator.connect(filter);
-    filter.connect(gain);
-    gain.connect(ambienceGain);
-    oscillator.start();
-
-    ambienceNodes.push(oscillator, filter, gain);
-  });
-}
-
-function scheduleSoftClink() {
-  if (!ambienceContext || !ambienceGain) return;
-
-  const delay = 1800 + Math.random() * 3200;
-  const timer = setTimeout(() => {
-    playSoftClink();
-    scheduleSoftClink();
-  }, delay);
-
-  ambienceTimers.push(timer);
-}
-
-function playSoftClink() {
-  if (!ambienceContext || !ambienceGain) return;
-
-  const now = ambienceContext.currentTime;
-  const oscillator = ambienceContext.createOscillator();
-  const gain = ambienceContext.createGain();
-  const filter = ambienceContext.createBiquadFilter();
-
-  oscillator.type = "sine";
-  oscillator.frequency.setValueAtTime(1050 + Math.random() * 650, now);
-  filter.type = "highpass";
-  filter.frequency.value = 850;
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.009, now + 0.015);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
-
-  oscillator.connect(filter);
-  filter.connect(gain);
-  gain.connect(ambienceGain);
-  oscillator.start(now);
-  oscillator.stop(now + 0.2);
-
-  ambienceNodes.push(oscillator, filter, gain);
-}
-
-function stopRestaurantAmbience() {
-  if (ambienceDuckTimer) {
-    clearTimeout(ambienceDuckTimer);
-    ambienceDuckTimer = null;
-  }
-
-  if (ambienceAudioFadeTimer) {
-    clearInterval(ambienceAudioFadeTimer);
-    ambienceAudioFadeTimer = null;
-  }
-
-  if (ambienceAudio) {
-    try {
-      ambienceAudio.pause();
-      ambienceAudio.currentTime = 0;
-      ambienceAudio.removeAttribute("src");
-      ambienceAudio.load();
-    } catch {}
-
-    ambienceAudio = null;
-  }
-
-  ambienceTimers.forEach((timer) => clearTimeout(timer));
-  ambienceTimers = [];
-
-  if (!ambienceContext) return;
-
-  const contextToClose = ambienceContext;
-  const nodesToStop = ambienceNodes;
+  if (!ambienceAudio) return;
 
   try {
-    if (ambienceGain) {
-      ambienceGain.gain.cancelScheduledValues(contextToClose.currentTime);
-      ambienceGain.gain.setValueAtTime(ambienceGain.gain.value, contextToClose.currentTime);
-      ambienceGain.gain.linearRampToValueAtTime(0.0001, contextToClose.currentTime + 0.25);
-    }
+    ambienceAudio.pause();
+    ambienceAudio.currentTime = 0;
+    ambienceAudio.removeAttribute("src");
+    ambienceAudio.load();
+  } catch {}
 
-    setTimeout(() => {
-      nodesToStop.forEach((node) => {
-        try {
-          node.stop?.();
-          node.disconnect?.();
-        } catch {}
-      });
-      contextToClose.close?.();
-    }, 280);
-  } catch (error) {
-    console.warn("Restaurant ambience stop failed", error);
-  }
-
-  ambienceContext = null;
-  ambienceGain = null;
-  ambienceNodes = [];
+  ambienceAudio = null;
 }
 
-function resetLeadState() {
-  clearWhatsAppFailsafe();
+function resetLead() {
   notes.length = 0;
-  callTranscriptSent = false;
-  whatsappIntentSeen = false;
+  transcriptSent = false;
   whatsappForcedVisible = false;
-
   Object.assign(lead, {
     name: "",
     phone: "",
@@ -610,8 +351,7 @@ function resetLeadState() {
     occasion: "",
     intent: "",
   });
-
-  hideActionButtons();
+  hideActions();
 }
 
 function setActive(active) {
@@ -619,28 +359,26 @@ function setActive(active) {
   widget.classList.toggle("is-active", active);
   label.innerText = active ? "clicca per chiudere" : "clicca per parlare";
   btn.setAttribute("aria-label", active ? "Clicca per chiudere" : "Clicca per parlare");
-
-  if (!active) {
-    hideStatus();
-  }
+  if (!active) hideStatus();
 }
 
 function stopCall() {
-  clearSilenceTimer();
-  clearAssistantResponseResetTimer();
-  stopRestaurantAmbience();
+  clearTimeout(silenceTimer);
+  clearTimeout(idleTimer);
+  clearTimeout(responseResetTimer);
   sendCallTranscript();
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
-  audio?.remove();
+  outputAudio?.remove();
   pc = null;
   stream = null;
-  audio = null;
+  outputAudio = null;
   eventsChannel = null;
-  assistantResponseInProgress = false;
-  lastAssistantRequestText = "";
-  lastAssistantRequestAt = 0;
+  responseInProgress = false;
+  greetingSent = false;
+  idlePromptSent = false;
   setActive(false);
+  stopAmbience();
 
   if (hasCommercialIntent()) {
     forceWhatsAppButton();
@@ -650,20 +388,163 @@ function stopCall() {
 }
 
 function resetSilenceTimer() {
-  clearSilenceTimer();
+  clearTimeout(silenceTimer);
   silenceTimer = setTimeout(() => {
     if (isActive) {
       showStatus("Chiamata chiusa per inattivita");
       stopCall();
     }
-  }, 20000);
+  }, 25000);
 }
 
-function clearSilenceTimer() {
-  if (silenceTimer) {
-    clearTimeout(silenceTimer);
-    silenceTimer = null;
+function scheduleIdlePrompt() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (!isActive || idlePromptSent || notes.length) return;
+    idlePromptSent = true;
+    requestAssistantPrompt("Di solo questa frase, una volta: 'Pronto, c'e ancora?' Poi fermati e ascolta.", "idle");
+  }, 9000);
+}
+
+function markResponse(key) {
+  lastResponseKey = key;
+  lastResponseAt = Date.now();
+  responseInProgress = true;
+  clearTimeout(responseResetTimer);
+  responseResetTimer = setTimeout(() => {
+    responseInProgress = false;
+    responseResetTimer = null;
+  }, 5000);
+}
+
+function requestAssistantPrompt(instructions, key) {
+  if (!eventsChannel || eventsChannel.readyState !== "open") return false;
+  if (responseInProgress) return false;
+  if (key === lastResponseKey && Date.now() - lastResponseAt < 5000) return false;
+
+  markResponse(key);
+
+  try {
+    eventsChannel.send(JSON.stringify({
+      type: "response.create",
+      response: { instructions },
+    }));
+    return true;
+  } catch (error) {
+    responseInProgress = false;
+    console.warn("Assistant prompt not sent", error);
+    return false;
   }
+}
+
+function requestAssistantResponse(text) {
+  const key = cleanText(text);
+  if (!eventsChannel || eventsChannel.readyState !== "open") return;
+  if (!textLooksMeaningful(key)) return;
+  if (responseInProgress) return;
+  if (key === lastResponseKey && Date.now() - lastResponseAt < 5000) return;
+  if (Date.now() - lastResponseAt < 900) return;
+
+  markResponse(key);
+
+  try {
+    eventsChannel.send(JSON.stringify({ type: "response.create" }));
+  } catch (error) {
+    responseInProgress = false;
+    console.warn("Assistant response not sent", error);
+  }
+}
+
+function maybeSendGreeting() {
+  if (greetingSent || !isActive || !eventsChannel || eventsChannel.readyState !== "open") return;
+  greetingSent = true;
+  requestAssistantPrompt("Di solo questa frase: 'Sono Adriana di Palazzo Cusani. Mi dica pure.' Poi fermati e ascolta.", "greeting");
+  scheduleIdlePrompt();
+}
+
+function handleRealtimeEvent(message) {
+  let event;
+
+  try {
+    event = JSON.parse(message.data);
+  } catch {
+    return;
+  }
+
+  handleAssistantLifecycle(event);
+
+  if (!eventHasFinalUserTranscript(event)) return;
+
+  const text = getEventText(event);
+  if (!textLooksMeaningful(text)) return;
+
+  clearTimeout(idleTimer);
+  rememberUserText(text);
+
+  if (textLooksLikeEmailRequest(text)) showGeneralEmail();
+  if (textLooksLikeParkingRequest(text)) showDefenseEmail("parcheggio");
+  if (textLooksLikeForesteriaRequest(text)) showDefenseEmail("foresteria");
+
+  requestAssistantResponse(text);
+}
+
+function handleAssistantLifecycle(event) {
+  const type = event?.type || "";
+
+  if (
+    type.includes("response.audio.delta") ||
+    type.includes("output_audio_buffer.started") ||
+    type.includes("input_audio_buffer.speech_started")
+  ) {
+    duckAmbience();
+  }
+
+  if (
+    type.includes("response.done") ||
+    type.includes("response.audio.done") ||
+    type.includes("output_audio_buffer.stopped") ||
+    type.includes("input_audio_buffer.speech_stopped")
+  ) {
+    responseInProgress = false;
+    clearTimeout(responseResetTimer);
+    restoreAmbience();
+  }
+}
+
+function eventHasFinalUserTranscript(event) {
+  const type = event?.type || "";
+  return (
+    type.includes("input_audio_transcription.completed") ||
+    type.includes("conversation.item.input_audio_transcription.completed")
+  );
+}
+
+function getEventText(event) {
+  const parts = [];
+
+  function collect(value) {
+    if (!value) return;
+    if (typeof value === "string") {
+      parts.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(collect);
+      return;
+    }
+    if (typeof value === "object") {
+      collect(value.transcript);
+      collect(value.text);
+      collect(value.output_text);
+      collect(value.content);
+      collect(value.item);
+    }
+  }
+
+  collect(event?.transcript);
+  if (event?.item?.role === "user") collect(event.item);
+  if (event?.role === "user") collect(event);
+  return cleanText(parts.join(" "));
 }
 
 function rememberUserText(text) {
@@ -673,246 +554,151 @@ function rememberUserText(text) {
   notes.push(cleaned);
   resetSilenceTimer();
   updateLeadFromText(cleaned);
-  scheduleWhatsAppFailsafe();
   updateContactButtons();
 }
 
 function updateLeadFromText(text) {
   const normalized = text.toLowerCase();
-  const hasEventIntent = textLooksLikeEventRequest(text);
-  const hasBookingIntent = textLooksLikeBookingRequest(text);
 
-  if (hasEventIntent && !normalized.includes("tavolo")) {
+  if (textLooksLikeEventRequest(text) && !normalized.includes("tavolo")) {
     lead.intent = "evento";
-  } else if (hasBookingIntent) {
+  } else if (textLooksLikeBookingRequest(text)) {
     lead.intent = "prenotazione";
-  } else if (hasEventIntent) {
-    lead.intent = "evento";
   } else if (!lead.intent && normalized.length > 8) {
     lead.intent = "informazioni";
   }
 
-  const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  if (emailMatch) {
-    lead.email = emailMatch[0];
-  }
+  const email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  if (email) lead.email = email[0];
 
-  const phoneMatch = text.match(/(?:\+?\d[\s.-]?){8,}/);
-  if (phoneMatch) {
-    lead.phone = phoneMatch[0].trim();
-  }
+  const phone = text.match(/(?:\+?\d[\s.-]?){8,}/);
+  if (phone) lead.phone = phone[0].trim();
 
-  const capturedName = getNameFromText(text);
-  if (capturedName && (!lead.name || textLooksLikeExplicitName(text))) {
-    lead.name = capturedName;
-  } else if (!lead.name && looksLikeNameAnswer(text) && !textLooksLikeAdditionalNote(text)) {
+  const explicitName = getExplicitName(text);
+  if (explicitName) {
+    lead.name = explicitName;
+  } else if (!lead.name && lead.intent && looksLikeNameAnswer(text) && !textLooksLikeAdditionalNote(text)) {
     lead.name = cleanCapturedValue(text);
   }
 
   const people = getPeopleFromText(text);
-  if (people) {
-    lead.people = people;
-  }
+  if (people) lead.people = people;
 
-  if (normalized.includes("pranzo") || normalized.includes("a pranzo")) {
-    lead.meal = "pranzo";
-  }
+  if (/\b(pranzo|a pranzo)\b/i.test(text)) lead.meal = "pranzo";
+  if (/\b(cena|a cena|sera|stasera)\b/i.test(text)) lead.meal = "cena";
 
-  if (
-    normalized.includes("cena") ||
-    normalized.includes("a cena") ||
-    normalized.includes("sera") ||
-    normalized.includes("stasera")
-  ) {
-    lead.meal = "cena";
-  }
-
-  const occasionMatch = text.match(/\b(cresima|battesimo|compleanno|laurea|comunione|anniversario|matrimonio|meeting|festa|aziendale|conviviale|ricorrenza)\b/i);
-  if (occasionMatch && lead.intent !== "prenotazione") {
-    lead.occasion = occasionMatch[1];
-  } else if (lead.intent === "evento" && !lead.occasion) {
-    lead.occasion = getGenericEventOccasion(text);
-  }
+  const occasion = text.match(/\b(cresima|battesimo|compleanno|laurea|comunione|anniversario|matrimonio|meeting|festa|aziendale|conviviale|ricorrenza)\b/i);
+  if (occasion && lead.intent !== "prenotazione") lead.occasion = occasion[1];
+  if (lead.intent === "evento" && !lead.occasion) lead.occasion = getGenericEventOccasion(text);
 
   const time = getTimeFromText(text);
-  if (time) {
-    lead.time = time;
-
-    const hour = Number(time.split(":")[0]);
-    if (!lead.meal && hour >= 11 && hour <= 16) lead.meal = "pranzo";
-    if (!lead.meal && hour >= 18 && hour <= 23) lead.meal = "cena";
-  }
+  if (time) lead.time = time;
 
   const date = getDateFromText(text);
-  if (date) {
-    lead.day = date;
-  }
+  if (date) lead.day = date;
 }
 
-function getNameFromText(text) {
+function getExplicitName(text) {
   const patterns = [
-    /\b(?:mi chiamo|io sono|sono|yo soy|soy)\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
-    /\b(?:il mio|la mia|mio|mia)\s+nome\s+(?:e|è|di)\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
-    /\b(?:il\s+|la\s+|el\s+)?nome\s+(?:e|è|di)\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
-    /\ba nome di\s+([a-zA-ZÀ-ÿ' ]{2,50})(?=\s*(?:$|[.,;!?]|\b(?:e|per|vorrei|voglio|volevo|desidero|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi)\b))/i,
+    /\b(?:mi chiamo|io sono|a nome di)\s+([a-zA-ZÀ-ÿ' ]{2,50})/i,
+    /\b(?:il mio nome e|il mio nome è|nome e|nome è)\s+([a-zA-ZÀ-ÿ' ]{2,50})/i,
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (!match?.[1]) continue;
-
     const name = cleanCapturedValue(match[1]);
-    if (looksLikeNameAnswer(name) && !looksLikeMisheardPeople(name)) {
-      return name;
-    }
+    if (looksLikeNameAnswer(name)) return name;
   }
 
   return "";
-}
-
-function textLooksLikeExplicitName(text) {
-  return /\b(mi chiamo|io sono|sono|nome|a nome di|yo soy|soy)\b/i.test(text);
 }
 
 function getPeopleFromText(text) {
   const trimmed = text.trim();
-  const numberMatch =
+  const numeric =
     text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti|invitati|partecipanti|commensali)\b/i) ||
     text.match(/\b(?:per|siamo|saremo|in|circa)\s+(\d{1,3})\b/i);
 
-  if (numberMatch) {
-    return numberMatch[1];
-  }
+  if (numeric) return numeric[1];
+  if (/^\d{1,3}$/.test(trimmed) && lead.intent) return trimmed;
 
-  if (/^\d{1,3}$/.test(trimmed) && lead.intent && (lead.day || lead.meal || lead.time || lead.occasion)) {
-    return trimmed;
-  }
+  const words = {
+    uno: 1, una: 1, due: 2, tre: 3, quattro: 4, cinque: 5, sei: 6, sette: 7,
+    otto: 8, nove: 9, dieci: 10, undici: 11, dodici: 12, tredici: 13,
+    quattordici: 14, quindici: 15, sedici: 16, diciassette: 17, diciotto: 18,
+    diciannove: 19, venti: 20, trenta: 30, trentina: 30, quaranta: 40,
+    cinquanta: 50, sessanta: 60, settanta: 70, ottanta: 80, novanta: 90, cento: 100,
+  };
+  const wordList = Object.keys(words).join("|");
+  const match =
+    text.toLowerCase().match(new RegExp(`\\b(${wordList})\\s+(?:persone|ospiti|coperti|invitati|partecipanti|commensali)\\b`, "i")) ||
+    text.toLowerCase().match(new RegExp(`\\b(?:per|siamo|saremo|in)\\s+(${wordList})\\b`, "i"));
 
-  const spokenPeople = parsePeopleFromText(text);
-  return spokenPeople ? String(spokenPeople) : "";
+  return match ? String(words[match[1].toLowerCase()]) : "";
 }
 
 function getTimeFromText(text) {
   const normalized = text.toLowerCase();
-  const numeric = text.match(/\b(?:alle|ore)\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
+  const numeric = text.match(/\b(?:alle|ore)?\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
 
-  if (numeric) {
-    return formatTimeValue(numeric[1], numeric[2]);
+  if (!numeric || !/\b(alle|ore|orario|pranzo|cena|sera|stasera)\b/i.test(text)) return "";
+
+  let hour = Number(numeric[1]);
+  const minutes = numeric[2] || "00";
+
+  if ((lead.meal === "cena" || /\b(cena|sera|stasera)\b/i.test(normalized)) && hour >= 1 && hour <= 11) {
+    hour += 12;
+  }
+  if ((lead.meal === "pranzo" || /\bpranzo\b/i.test(normalized)) && hour >= 1 && hour <= 4) {
+    hour += 12;
   }
 
-  if (!/\b(alle|ore|orario|pranzo|cena|sera)\b/.test(normalized)) {
-    return "";
-  }
-
-  const numberWords = {
-    una: 1,
-    uno: 1,
-    due: 2,
-    tre: 3,
-    quattro: 4,
-    cinque: 5,
-    sei: 6,
-    sette: 7,
-    otto: 8,
-    nove: 9,
-    dieci: 10,
-    undici: 11,
-    dodici: 12,
-    tredici: 13,
-    quattordici: 14,
-    quindici: 15,
-    sedici: 16,
-    diciassette: 17,
-    diciotto: 18,
-    diciannove: 19,
-    venti: 20,
-    ventuno: 21,
-    ventidue: 22,
-    ventitre: 23,
-    ventitré: 23,
-  };
-
-  const words = Object.keys(numberWords).join("|");
-  const match = normalized.match(new RegExp(`\\b(?:alle|ore)?\\s*(${words})\\b`, "i"));
-
-  return match ? formatTimeValue(numberWords[match[1].toLowerCase()]) : "";
+  return `${String(hour).padStart(2, "0")}:${minutes}`;
 }
 
 function getDateFromText(text) {
-  const datePatterns = [
+  const patterns = [
     /\b(oggi|domani|dopodomani|stasera|questa sera)\b/i,
     /\b(lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica)\b/i,
-    /\b((?:inizio|meta|metà|fine)\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
-    /\b(?:a|di|per|nel mese di)\s+((?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
-    /\b((?:sabato|domenica|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì)\s+\d{1,2}(?:\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))?)\b/i,
-    /\b(\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
     /\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b/i,
+    /\b(\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre))\b/i,
   ];
 
-  for (const pattern of datePatterns) {
+  for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match) return match[1];
+    if (match) return expandDate(match[1]);
   }
 
   return "";
 }
 
-function formatDateForMessage(value) {
+function expandDate(value) {
   const cleaned = cleanText(value);
-  const normalized = normalizeDateText(cleaned);
+  const normalized = cleaned.toLowerCase()
+    .replace(/[ìí]/g, "i")
+    .replace(/[èé]/g, "e");
 
-  if (normalized === "oggi") {
-    return `${cleaned} ${formatDateValue(new Date())}`;
+  if (normalized === "oggi" || normalized === "stasera" || normalized === "questa sera") {
+    return `${cleaned} ${formatDate(addDays(new Date(), 0))}`;
   }
+  if (normalized === "domani") return `${cleaned} ${formatDate(addDays(new Date(), 1))}`;
+  if (normalized === "dopodomani") return `${cleaned} ${formatDate(addDays(new Date(), 2))}`;
 
-  if (normalized === "domani") {
-    return `${cleaned} ${formatDateValue(addDays(new Date(), 1))}`;
-  }
-
-  if (normalized === "dopodomani") {
-    return `${cleaned} ${formatDateValue(addDays(new Date(), 2))}`;
-  }
-
-  const weekdayIndex = getWeekdayIndex(normalized);
-  if (weekdayIndex !== null && !/\d/.test(cleaned)) {
-    return `${cleaned} ${formatDateValue(getNextWeekdayDate(weekdayIndex))}`;
+  const weekdays = { domenica: 0, lunedi: 1, martedi: 2, mercoledi: 3, giovedi: 4, venerdi: 5, sabato: 6 };
+  if (Object.prototype.hasOwnProperty.call(weekdays, normalized) && !/\d/.test(cleaned)) {
+    return `${cleaned} ${formatDate(nextWeekday(weekdays[normalized]))}`;
   }
 
   return cleaned;
 }
 
-function normalizeDateText(value) {
-  return value
-    .toLowerCase()
-    .replace(/[ìí]/g, "i")
-    .replace(/[èé]/g, "e")
-    .trim();
-}
-
-function getWeekdayIndex(value) {
-  const weekdays = {
-    domenica: 0,
-    lunedi: 1,
-    martedi: 2,
-    mercoledi: 3,
-    giovedi: 4,
-    venerdi: 5,
-    sabato: 6,
-  };
-
-  return Object.prototype.hasOwnProperty.call(weekdays, value) ? weekdays[value] : null;
-}
-
-function getNextWeekdayDate(weekdayIndex) {
+function nextWeekday(day) {
   const today = new Date();
   const result = new Date(today);
-  let daysToAdd = (weekdayIndex - today.getDay() + 7) % 7;
-
-  if (daysToAdd === 0) {
-    daysToAdd = 7;
-  }
-
-  result.setDate(today.getDate() + daysToAdd);
+  let diff = (day - today.getDay() + 7) % 7;
+  if (diff === 0) diff = 7;
+  result.setDate(today.getDate() + diff);
   return result;
 }
 
@@ -922,340 +708,107 @@ function addDays(date, days) {
   return result;
 }
 
-function formatDateValue(date) {
-  return new Intl.DateTimeFormat("it-IT", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(date);
+function formatDate(date) {
+  return new Intl.DateTimeFormat("it-IT", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
 }
 
 function cleanText(value) {
-  return value.replace(/\s+/g, " ").trim();
+  return String(value || "").replace(/\s+/g, " ").trim();
 }
 
 function cleanCapturedValue(value) {
   return cleanText(value)
-    .replace(/\b(?:e|il mio|la mia|telefono|whatsapp|cellulare|per|vorrei|prenotare|prenotale).*$/i, "")
-    .replace(/^(?:il|la|el)\s+/i, "")
+    .replace(/\b(?:e|per|vorrei|voglio|prenotare|prenotazione|tavolo|evento|siamo|saremo|alle|domani|oggi).*$/i, "")
     .replace(/[.,;:!?]+$/g, "")
     .trim();
-}
-
-function formatTimeValue(hour, minutes = "00") {
-  return `${String(normalizeHourForMeal(hour)).padStart(2, "0")}:${minutes || "00"}`;
-}
-
-function normalizeHourForMeal(hour) {
-  let numericHour = Number(hour);
-
-  if (lead.meal === "cena" && numericHour >= 1 && numericHour <= 11) {
-    numericHour += 12;
-  }
-
-  if (lead.meal === "pranzo" && numericHour >= 1 && numericHour <= 4) {
-    numericHour += 12;
-  }
-
-  return numericHour;
 }
 
 function looksLikeNameAnswer(text) {
   const normalized = text.toLowerCase().trim();
   if (!/^[a-zA-ZÀ-ÿ' ]{4,50}$/.test(text.trim())) return false;
   if (normalized.split(/\s+/).length > 4) return false;
-  if (textLooksLikeAdditionalNote(text)) return false;
-
   return ![
-    "trener",
-    "trenta",
-    "trentine",
-    "trentina",
-    "preventivo",
-    "organizzare",
-    "interessato",
-    "interessata",
-    "prenot",
-    "tavolo",
-    "evento",
-    "mail",
-    "email",
-    "whatsapp",
-    "telefono",
-    "domani",
-    "oggi",
-    "pranzo",
-    "cena",
-    "persone",
-    "numero",
-    "quante",
-    "anche",
-    "bambino",
-    "bambini",
-    "bambina",
-    "bambine",
-    "bimbo",
-    "bimbi",
-    "adulti",
-    "ragazzi",
-    "seggiolone",
-    "passeggino",
-    "allergia",
-    "allergie",
-    "intolleranza",
-    "intolleranze",
-    "celiaco",
-    "celiaci",
-    "vegetariano",
-    "vegano",
-    "adriana",
-    "palazzo",
-    "cusani",
-    "assistente",
-    "dica pure",
+    "prenot", "tavolo", "evento", "mail", "email", "whatsapp", "telefono", "domani", "oggi",
+    "pranzo", "cena", "persone", "numero", "anche", "bambin", "bimb", "adult", "allerg",
+    "seggiolone", "passeggino", "adriana", "palazzo", "cusani", "perfetto", "certamente",
   ].some((word) => normalized.includes(word));
 }
 
-function parsePeopleFromText(text) {
-  const normalized = text.toLowerCase();
-  const numberWords = {
-    uno: 1,
-    una: 1,
-    due: 2,
-    tre: 3,
-    quattro: 4,
-    cinque: 5,
-    sei: 6,
-    sette: 7,
-    otto: 8,
-    nove: 9,
-    dieci: 10,
-    undici: 11,
-    dodici: 12,
-    tredici: 13,
-    quattordici: 14,
-    quindici: 15,
-    sedici: 16,
-    diciassette: 17,
-    diciotto: 18,
-    diciannove: 19,
-    venti: 20,
-    trenta: 30,
-    trentina: 30,
-    trentine: 30,
-    trener: 30,
-    quaranta: 40,
-    cinquanta: 50,
-    sessanta: 60,
-    settanta: 70,
-    ottanta: 80,
-    novanta: 90,
-    cento: 100,
-  };
+function textLooksMeaningful(text) {
+  const cleaned = cleanText(text).toLowerCase();
+  if (!cleaned) return false;
+  if (!/[a-zA-ZÀ-ÿ0-9]/.test(cleaned)) return false;
+  if (/^(eh|e|uh|um|mmm|mh|ah|oh)$/i.test(cleaned)) return false;
+  if (/\b(silenzio|rumore|rumori|musica|sottofondo|incomprensibile|inaudible|noise)\b/i.test(cleaned)) return false;
+  if (/\b(sono adriana|adriana di palazzo cusani|mi dica pure|pronto c'e ancora|pronto c'è ancora)\b/i.test(cleaned)) return false;
+  return true;
+}
 
-  const words = Object.keys(numberWords).join("|");
-  const match =
-    normalized.match(new RegExp(`\\b(${words})\\s+(?:persone|ospiti|coperti|invitati|partecipanti|commensali)\\b`, "i")) ||
-    normalized.match(new RegExp(`\\b(?:per|siamo|saremo|in)\\s+(${words})\\b`, "i"));
+function textLooksLikeAdditionalNote(text) {
+  return /\b(anche|bambin\w*|bimb\w*|ragazz\w*|adult\w*|seggiolone|passeggino|allerg\w*|intoller\w*|celiac\w*|vegetarian\w*|vegan\w*|carrozzina|sedia a rotelle|torta|candeline|nota|note|aggiungo|in piu|in più)\b/i.test(text);
+}
 
-  return match ? numberWords[match[1].toLowerCase()] : "";
+function getCustomerNotes() {
+  return [...new Set(notes.filter(textLooksLikeAdditionalNote).map(cleanText))].join("; ");
 }
 
 function getGenericEventOccasion(text) {
   const normalized = text.toLowerCase();
-
   if (normalized.includes("preventivo")) return "richiesta preventivo";
   if (normalized.includes("evento")) return "evento";
   if (normalized.includes("ricorrenza")) return "ricorrenza";
   if (normalized.includes("cerimonia")) return "cerimonia";
   if (normalized.includes("sala") || normalized.includes("salone")) return "sala evento";
   if (normalized.includes("aziendale")) return "evento aziendale";
-
   return "";
 }
 
-function looksLikeMisheardPeople(text) {
-  return /\b(trener|trenta|trentine|trentina|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)\b/i.test(text);
-}
-
-function textLooksLikeAdditionalNote(text) {
+function textLooksLikeBookingRequest(text) {
   const normalized = text.toLowerCase();
-
-  return /\b(anche|bambin\w*|bimb\w*|ragazz\w*|adult\w*|seggiolone|passeggino|allerg\w*|intoller\w*|celiac\w*|vegetarian\w*|vegan\w*|carrozzina|disabil\w*|sedia a rotelle|torta|candeline|anniversario|compleanno|cane|animale|nota|note|aggiungo|in piu|in più)\b/i.test(normalized);
+  return ["prenot", "riserv", "tavolo", "disponibil", "vorrei venire", "posso venire", "posto"].some((word) => normalized.includes(word));
 }
 
-function getCustomerNotes() {
-  const importantNotes = notes
-    .filter((note) => textLooksLikeAdditionalNote(note))
-    .map(cleanText)
-    .filter((note) => note && note.toLowerCase() !== (lead.name || "").toLowerCase());
-
-  return [...new Set(importantNotes)].join("; ");
-}
-
-function getPublicSummary() {
+function textLooksLikeEventRequest(text) {
+  const normalized = text.toLowerCase();
   return [
-    `Tipo richiesta: ${lead.intent || "richiesta"}`,
-    lead.occasion ? `Occasione: ${lead.occasion}` : "",
-    lead.name ? `Nome: ${lead.name}` : "",
-    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
-    lead.email ? `Email cliente: ${lead.email}` : "",
-    lead.day ? `Giorno/data: ${formatDateForMessage(lead.day)}` : "",
-    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
-    lead.time ? `Ora: ${lead.time}` : "",
-    lead.people ? `Persone: ${lead.people}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "preventivo", "organizz", "cerimonia", "evento", "eventi", "cresima", "battesimo",
+    "compleanno", "ricorrenza", "anniversario", "matrimonio", "meeting", "festa",
+    "laurea", "comunione", "aziendale", "conviviale", "occasione", "salone", "sala",
+  ].some((word) => normalized.includes(word));
 }
 
-function getContactRequestBody() {
-  refreshLeadFromNotes();
-
-  return [
-    "Buongiorno,",
-    getWhatsappSummary(),
-    "",
-    "Invio questa richiesta per ricevere conferma definitiva. Grazie.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+function textLooksLikeEmailRequest(text) {
+  const normalized = text.toLowerCase();
+  return ["email", "e-mail", "mail", "indirizzo di posta", "contatto email"].some((word) => normalized.includes(word));
 }
 
-function refreshLeadFromNotes() {
-  notes.forEach(updateLeadFromText);
+function textLooksLikeParkingRequest(text) {
+  const normalized = text.toLowerCase();
+  return normalized.includes("parcheggio") || normalized.includes("parcheggiare");
 }
 
-function getWhatsappSummary() {
-  const customerNotes = getCustomerNotes();
-  const requestLabel =
-    lead.intent === "evento"
-      ? "evento / ricorrenza"
-      : lead.intent === "prenotazione"
-        ? "prenotazione tavolo"
-        : "richiesta informazioni";
-
-  return [
-    `Richiesta: ${requestLabel}`,
-    lead.occasion ? `Occasione: ${lead.occasion}` : "",
-    lead.day ? `Data: ${formatDateForMessage(lead.day)}` : "",
-    lead.meal ? `Servizio: ${lead.meal}` : "",
-    lead.time ? `Orario: ${lead.time}` : "",
-    lead.people ? `Persone: ${lead.people}` : "",
-    lead.name ? `Nome: ${lead.name}` : "",
-    customerNotes ? `Note: ${customerNotes}` : "",
-    getMissingWhatsappFields(),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function getMissingWhatsappFields() {
-  const missing = [];
-
-  if (!lead.name) missing.push("nome");
-  if (!lead.day) missing.push("data/giorno");
-  if (lead.intent === "prenotazione" && !lead.meal) missing.push("pranzo o cena");
-  if (lead.intent === "prenotazione" && !lead.time) missing.push("orario");
-  if (!lead.people) missing.push("numero persone");
-  if (lead.intent === "evento" && !lead.occasion) missing.push("tipo occasione");
-
-  return missing.length ? `Da confermare: ${missing.join(", ")}` : "";
-}
-
-function getInternalSummary() {
-  const transcript = notes.map((note) => `- ${note}`).join("\n");
-
-  return [
-    "Nuova richiesta dal voice agent Palazzo Cusani",
-    "",
-    `Obiettivo: ${lead.intent || "non rilevato"}`,
-    `Nome: ${lead.name || "non rilevato"}`,
-    `WhatsApp/telefono cliente: ${lead.phone || "non rilevato"}`,
-    `Email cliente: ${lead.email || "non rilevato"}`,
-    `Giorno: ${lead.day ? formatDateForMessage(lead.day) : "non rilevato"}`,
-    `Pranzo/cena: ${lead.meal || "non rilevato"}`,
-    `Ora: ${lead.time || "non rilevato"}`,
-    `Persone: ${lead.people || "non rilevato"}`,
-    `Occasione/evento: ${lead.occasion || "non rilevato"}`,
-    "",
-    "Trascrizione:",
-    transcript || "non disponibile",
-  ].join("\n");
-}
-
-function canShowContactButtons() {
-  if (userAskedForWhatsApp()) return true;
-  if (hasCommercialIntent()) return true;
-  if (whatsappForcedVisible) return true;
-  return false;
+function textLooksLikeForesteriaRequest(text) {
+  const normalized = text.toLowerCase();
+  return ["foresteria", "camera", "camere", "alloggio", "alloggi", "dormire", "pernottare", "pernottamento", "soggiornare"].some((word) => normalized.includes(word));
 }
 
 function hasCommercialIntent() {
-  return (
-    lead.intent === "prenotazione" ||
-    lead.intent === "evento" ||
-    notes.some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note))
-  );
+  return lead.intent === "prenotazione" || lead.intent === "evento" || notes.some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note));
 }
 
-function countConversationSignals() {
-  const text = notes.join(" ").toLowerCase();
-  const signals = [
-    lead.day || /\b(oggi|domani|dopodomani|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica|\d{1,2}[/-]\d{1,2})\b/i.test(text),
-    lead.meal || /\b(pranzo|cena|sera|stasera)\b/i.test(text),
-    lead.time || /\b(alle|ore)\s*([01]?\d|2[0-3])\b/i.test(text),
-    lead.people || /\b(\d{1,3})\s*(persone|ospiti|coperti)\b/i.test(text) || /\b(per|siamo|saremo|in)\s+\d{1,3}\b/i.test(text),
-    lead.name || /\b(mi chiamo|sono|nome|a nome di)\b/i.test(text),
-    lead.occasion || textLooksLikeEventRequest(text),
-  ];
-
-  return signals.filter(Boolean).length;
+function canShowContactButtons() {
+  return whatsappForcedVisible || hasCommercialIntent() || notes.join(" ").toLowerCase().includes("whatsapp");
 }
 
-function userAskedForConfirmation() {
-  const text = notes.join(" ").toLowerCase();
-
-  return (
-    notes.length >= 2 &&
-    /\b(whatsapp|conferma|confermare|messaggio|invia|mandare|prenotazione|ricontatto)\b/i.test(text)
-  );
-}
-
-function userAskedForWhatsApp() {
-  const text = notes.join(" ").toLowerCase();
-  return /\b(whatsapp|wa\.me|messaggio)\b/i.test(text);
-}
-
-function scheduleWhatsAppFailsafe() {
-  if (!hasCommercialIntent() || whatsappIntentSeen || whatsappForcedVisible) return;
-
-  whatsappIntentSeen = true;
-  clearWhatsAppFailsafe();
-
-  whatsappFailsafeTimer = setTimeout(() => {
-    if (!hasCommercialIntent()) return;
-
-    forceWhatsAppButton();
-
-    if (isActive) {
-      showStatus("WhatsApp pronto per inviare la richiesta");
-    }
-  }, 9000);
-}
-
-function clearWhatsAppFailsafe() {
-  if (whatsappFailsafeTimer) {
-    clearTimeout(whatsappFailsafeTimer);
-    whatsappFailsafeTimer = null;
-  }
+function updateContactButtons() {
+  updateWhatsAppButton();
+  updateEmailButtons();
+  if (lead.intent === "evento") generalEmail.style.display = "block";
 }
 
 function forceWhatsAppButton() {
   whatsappForcedVisible = true;
-  whatsapp.href = buildWhatsAppUrl();
-  whatsapp.innerText = "Invia richiesta su WhatsApp";
-  whatsapp.style.display = "block";
+  updateWhatsAppButton();
 }
 
 function updateWhatsAppButton() {
@@ -1269,6 +822,22 @@ function updateWhatsAppButton() {
   whatsapp.style.display = "block";
 }
 
+function updateEmailButtons() {
+  const subject = lead.intent === "evento" ? "Richiesta preventivo evento Palazzo Cusani" : "Richiesta informazioni Palazzo Cusani";
+  generalEmail.href = `mailto:${GENERAL_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(getContactRequestBody())}`;
+}
+
+function showGeneralEmail() {
+  updateEmailButtons();
+  generalEmail.style.display = "block";
+}
+
+function showDefenseEmail(topic = "Palazzo Cusani") {
+  const subject = topic === "foresteria" ? "Richiesta foresteria Palazzo Cusani" : topic === "parcheggio" ? "Richiesta parcheggio Palazzo Cusani" : "Richiesta Palazzo Cusani";
+  defenseEmail.href = `mailto:${PARKING_EMAIL}?subject=${encodeURIComponent(subject)}`;
+  defenseEmail.style.display = "block";
+}
+
 function openWhatsAppWithLatestMessage(event) {
   event.preventDefault();
   if (!canShowContactButtons() && !hasCommercialIntent()) return;
@@ -1279,274 +848,78 @@ function buildWhatsAppUrl() {
   return `https://wa.me/${PALAZZO_WHATSAPP}?text=${encodeURIComponent(getContactRequestBody())}`;
 }
 
-function updateEmailButtons() {
-  const subject =
-    lead.intent === "evento"
-      ? "Richiesta preventivo evento Palazzo Cusani"
-      : "Richiesta informazioni Palazzo Cusani";
+function getContactRequestBody() {
+  notes.forEach(updateLeadFromText);
 
-  generalEmail.href =
-    "mailto:" +
-    GENERAL_EMAIL +
-    "?subject=" +
-    encodeURIComponent(subject) +
-    "&body=" +
-    encodeURIComponent(getContactRequestBody());
+  return [
+    "Buongiorno,",
+    getWhatsappSummary(),
+    "",
+    "Invio questa richiesta per ricevere conferma definitiva. Grazie.",
+  ].filter(Boolean).join("\n");
 }
 
-function updateContactButtons() {
-  updateWhatsAppButton();
-  updateEmailButtons();
+function getWhatsappSummary() {
+  const requestLabel = lead.intent === "evento" ? "evento / ricorrenza" : lead.intent === "prenotazione" ? "prenotazione tavolo" : "richiesta informazioni";
+  const customerNotes = getCustomerNotes();
 
-  if (lead.intent === "evento") {
-    generalEmail.style.display = "block";
-  }
+  return [
+    `Richiesta: ${requestLabel}`,
+    lead.occasion ? `Occasione: ${lead.occasion}` : "",
+    lead.day ? `Data: ${lead.day}` : "",
+    lead.meal ? `Servizio: ${lead.meal}` : "",
+    lead.time ? `Orario: ${lead.time}` : "",
+    lead.people ? `Persone: ${lead.people}` : "",
+    lead.name ? `Nome: ${lead.name}` : "",
+    customerNotes ? `Note: ${customerNotes}` : "",
+    getMissingFields(),
+  ].filter(Boolean).join("\n");
+}
+
+function getMissingFields() {
+  const missing = [];
+  if (!lead.name) missing.push("nome");
+  if (!lead.day) missing.push("data/giorno");
+  if (lead.intent === "prenotazione" && !lead.meal) missing.push("pranzo o cena");
+  if (lead.intent === "prenotazione" && !lead.time) missing.push("orario");
+  if (!lead.people) missing.push("numero persone");
+  if (lead.intent === "evento" && !lead.occasion) missing.push("tipo occasione");
+  return missing.length ? `Da confermare: ${missing.join(", ")}` : "";
+}
+
+function getInternalSummary() {
+  return [
+    "Nuova richiesta dal voice agent Palazzo Cusani",
+    "",
+    `Obiettivo: ${lead.intent || "non rilevato"}`,
+    `Nome: ${lead.name || "non rilevato"}`,
+    `WhatsApp/telefono cliente: ${lead.phone || "non rilevato"}`,
+    `Email cliente: ${lead.email || "non rilevato"}`,
+    `Giorno: ${lead.day || "non rilevato"}`,
+    `Pranzo/cena: ${lead.meal || "non rilevato"}`,
+    `Ora: ${lead.time || "non rilevato"}`,
+    `Persone: ${lead.people || "non rilevato"}`,
+    `Occasione/evento: ${lead.occasion || "non rilevato"}`,
+    "",
+    "Trascrizione:",
+    notes.map((note) => `- ${note}`).join("\n") || "non disponibile",
+  ].join("\n");
 }
 
 async function sendCallTranscript() {
-  if (callTranscriptSent || !notes.length) return;
-
-  callTranscriptSent = true;
+  if (transcriptSent || !notes.length) return;
+  transcriptSent = true;
 
   try {
     await fetch(LEAD_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        summary: getInternalSummary(),
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ summary: getInternalSummary() }),
     });
   } catch (error) {
+    transcriptSent = false;
     console.warn("Call transcript email not sent", error);
-    callTranscriptSent = false;
   }
-}
-
-function showGeneralEmail() {
-  updateEmailButtons();
-  generalEmail.style.display = "block";
-}
-
-function showDefenseEmail(topic = "Palazzo Cusani") {
-  const subject =
-    topic === "foresteria"
-      ? "Richiesta foresteria Palazzo Cusani"
-      : topic === "parcheggio"
-        ? "Richiesta parcheggio Palazzo Cusani"
-        : "Richiesta Palazzo Cusani";
-
-  defenseEmail.href =
-    "mailto:" +
-    PARKING_EMAIL +
-    "?subject=" +
-    encodeURIComponent(subject);
-  defenseEmail.style.display = "block";
-}
-
-function textLooksLikeEmailRequest(text) {
-  const normalized = text.toLowerCase();
-  return (
-    normalized.includes("email") ||
-    normalized.includes("e-mail") ||
-    normalized.includes("mail") ||
-    normalized.includes("indirizzo di posta") ||
-    normalized.includes("contatto email")
-  );
-}
-
-function textLooksLikeParkingRequest(text) {
-  const normalized = text.toLowerCase();
-  return normalized.includes("parcheggio") || normalized.includes("parcheggiare");
-}
-
-function textLooksLikeForesteriaRequest(text) {
-  const normalized = text.toLowerCase();
-  return (
-    normalized.includes("foresteria") ||
-    normalized.includes("camera") ||
-    normalized.includes("camere") ||
-    normalized.includes("alloggio") ||
-    normalized.includes("alloggi") ||
-    normalized.includes("dormire") ||
-    normalized.includes("pernottare") ||
-    normalized.includes("pernottamento") ||
-    normalized.includes("soggiornare")
-  );
-}
-
-function textLooksLikeBookingRequest(text) {
-  const normalized = text.toLowerCase();
-  return (
-    normalized.includes("prenot") ||
-    normalized.includes("riserv") ||
-    normalized.includes("tavolo") ||
-    normalized.includes("disponibil") ||
-    normalized.includes("vorrei venire") ||
-    normalized.includes("posso venire") ||
-    normalized.includes("posto")
-  );
-}
-
-function textLooksLikeEventRequest(text) {
-  const normalized = text.toLowerCase();
-  return (
-    normalized.includes("preventivo") ||
-    normalized.includes("organizz") ||
-    normalized.includes("cerimonia") ||
-    normalized.includes("evento") ||
-    normalized.includes("eventi") ||
-    normalized.includes("cresima") ||
-    normalized.includes("battesimo") ||
-    normalized.includes("compleanno") ||
-    normalized.includes("ricorrenza") ||
-    normalized.includes("anniversario") ||
-    normalized.includes("matrimonio") ||
-    normalized.includes("meeting") ||
-    normalized.includes("festa") ||
-    normalized.includes("laurea") ||
-    normalized.includes("comunione") ||
-    normalized.includes("aziendale") ||
-    normalized.includes("conviviale") ||
-    normalized.includes("occasione") ||
-    normalized.includes("salone") ||
-    normalized.includes("sala")
-  );
-}
-
-function getEventText(event) {
-  const textParts = [];
-
-  function collect(value) {
-    if (!value) return;
-
-    if (typeof value === "string") {
-      textParts.push(value);
-      return;
-    }
-
-    if (Array.isArray(value)) {
-      value.forEach(collect);
-      return;
-    }
-
-    if (typeof value === "object") {
-      collect(value.transcript);
-      collect(value.text);
-      collect(value.output_text);
-      collect(value.content);
-      collect(value.part);
-      collect(value.item);
-    }
-  }
-
-  if (event?.type?.includes("input_audio_transcription")) {
-    collect(event.transcript);
-  }
-
-  if (event?.item?.role === "user") {
-    collect(event.item);
-  }
-
-  if (event?.role === "user") {
-    collect(event);
-  }
-
-  return textParts.join(" ");
-}
-
-function eventHasFinalUserTranscript(event) {
-  const type = event?.type || "";
-
-  return (
-    type.includes("input_audio_transcription.completed") ||
-    type.includes("conversation.item.input_audio_transcription.completed")
-  );
-}
-
-function textLooksLikeMeaningfulSpeech(text) {
-  const cleaned = cleanText(text).toLowerCase();
-
-  if (!cleaned) return false;
-  if (!/[a-zA-ZÀ-ÿ0-9]/.test(cleaned)) return false;
-  if (/^\W+$/.test(cleaned)) return false;
-  if (/^(eh|e|uh|um|mmm|mh|ah|oh)$/i.test(cleaned)) return false;
-  if (/\b(silenzio|rumore|rumori|musica|sottofondo|incomprensibile|non udibile|inaudible|noise)\b/i.test(cleaned)) {
-    return false;
-  }
-
-  return true;
-}
-
-function clearAssistantResponseResetTimer() {
-  if (assistantResponseResetTimer) {
-    clearTimeout(assistantResponseResetTimer);
-    assistantResponseResetTimer = null;
-  }
-}
-
-function requestAssistantResponse(text) {
-  const cleaned = cleanText(text);
-  const now = Date.now();
-
-  if (!eventsChannel || eventsChannel.readyState !== "open") return;
-  if (!textLooksLikeMeaningfulSpeech(cleaned)) return;
-  if (assistantResponseInProgress) return;
-  if (cleaned === lastAssistantRequestText && now - lastAssistantRequestAt < 5000) return;
-  if (now - lastAssistantRequestAt < 900) return;
-
-  lastAssistantRequestText = cleaned;
-  lastAssistantRequestAt = now;
-  assistantResponseInProgress = true;
-  clearAssistantResponseResetTimer();
-  assistantResponseResetTimer = setTimeout(() => {
-    assistantResponseInProgress = false;
-    assistantResponseResetTimer = null;
-  }, 12000);
-
-  try {
-    eventsChannel.send(
-      JSON.stringify({
-        type: "response.create",
-      })
-    );
-  } catch (error) {
-    assistantResponseInProgress = false;
-    console.warn("Assistant response not requested", error);
-  }
-}
-
-function handleRealtimeEvent(message) {
-  let event;
-
-  try {
-    event = JSON.parse(message.data);
-  } catch {
-    return;
-  }
-
-  handleAmbienceForRealtimeEvent(event);
-
-  const text = getEventText(event);
-  if (!text) return;
-  if (!eventHasFinalUserTranscript(event)) return;
-
-  rememberUserText(text);
-
-  if (textLooksLikeEmailRequest(text)) {
-    showGeneralEmail();
-  }
-
-  if (textLooksLikeParkingRequest(text)) {
-    showDefenseEmail("parcheggio");
-  }
-
-  if (textLooksLikeForesteriaRequest(text)) {
-    showDefenseEmail("foresteria");
-  }
-
-  requestAssistantResponse(text);
 }
 
 privacyStart.onclick = () => {
@@ -1556,7 +929,7 @@ privacyStart.onclick = () => {
   }
 
   privacyAccepted = true;
-  hidePrivacyBox();
+  privacyBox.style.display = "none";
   btn.click();
 };
 
@@ -1568,40 +941,34 @@ btn.onclick = async () => {
 
   if (!privacyAccepted) {
     hideStatus();
-    startRestaurantAmbience();
-    showPrivacyBox();
+    startAmbience(AMBIENCE_PREVIEW_VOLUME);
+    privacyBox.style.display = "block";
     return;
   }
 
   try {
-    stopRestaurantAmbience();
-    resetLeadState();
+    resetLead();
+    startAmbience(AMBIENCE_CALL_VOLUME);
     widget.classList.add("is-active");
     showStatus("Richiesta microfono...");
 
     const tokenRes = await fetch(SESSION_URL, { method: "POST" });
     const data = await tokenRes.json();
 
-    if (!tokenRes.ok) {
-      throw new Error(data.error || "Errore nella creazione della sessione");
-    }
+    if (!tokenRes.ok) throw new Error(data.error || "Errore nella creazione della sessione");
 
     const clientSecret = data.value || data.client_secret?.value;
-
-    if (!clientSecret) {
-      throw new Error("Client secret non ricevuto da OpenAI");
-    }
+    if (!clientSecret) throw new Error("Client secret non ricevuto da OpenAI");
 
     pc = new RTCPeerConnection();
-
-    audio = document.createElement("audio");
-    audio.autoplay = true;
-    audio.playsInline = true;
-    audio.volume = 1;
-    document.body.appendChild(audio);
+    outputAudio = document.createElement("audio");
+    outputAudio.autoplay = true;
+    outputAudio.playsInline = true;
+    outputAudio.volume = 1;
+    document.body.appendChild(outputAudio);
 
     pc.ontrack = (event) => {
-      audio.srcObject = event.streams[0];
+      outputAudio.srcObject = event.streams[0];
     };
 
     pc.onconnectionstatechange = () => {
@@ -1609,14 +976,14 @@ btn.onclick = async () => {
         setActive(true);
         hideStatus();
         resetSilenceTimer();
+        setTimeout(maybeSendGreeting, 600);
       }
 
-      if (["failed", "disconnected", "closed"].includes(pc?.connectionState)) {
-        stopCall();
-      }
+      if (["failed", "disconnected", "closed"].includes(pc?.connectionState)) stopCall();
     };
 
     eventsChannel = pc.createDataChannel("oai-events");
+    eventsChannel.addEventListener("open", () => setTimeout(maybeSendGreeting, 600));
     eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
@@ -1627,9 +994,7 @@ btn.onclick = async () => {
       },
     });
 
-    stream.getTracks().forEach((track) => {
-      pc.addTrack(track, stream);
-    });
+    stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -1645,19 +1010,13 @@ btn.onclick = async () => {
       body: offer.sdp,
     });
 
-    if (!sdpRes.ok) {
-      throw new Error(await sdpRes.text());
-    }
+    if (!sdpRes.ok) throw new Error(await sdpRes.text());
 
     const answer = await sdpRes.text();
-
-    await pc.setRemoteDescription({
-      type: "answer",
-      sdp: answer,
-    });
-  } catch (err) {
-    console.error(err);
-    alert("Errore: " + err.message);
+    await pc.setRemoteDescription({ type: "answer", sdp: answer });
+  } catch (error) {
+    console.error(error);
+    alert("Errore: " + error.message);
     stopCall();
   }
 };
