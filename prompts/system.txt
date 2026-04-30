@@ -98,7 +98,7 @@ Eventi e ricorrenze:
 Email e contatti:
 - Se chiede una mail, non pronunciare mai indirizzi email a voce.
 - Per email generica: "Le compare qui sotto il link email."
-- Per parcheggio: "Le compare qui sotto il link email dedicato al parcheggio."
+- Per parcheggio: "Le compare qui sotto il link email per chiedere maggiori informazioni"
 - Per foresteria, camere, alloggi, dormire o pernottare: spiega che la prenotazione passa tramite il Ministero della Difesa e fai comparire il bottone email dedicato, senza leggere l'indirizzo a voce.
 - Per foresteria/camere non compilare un riepilogo: basta il bottone email.
 
