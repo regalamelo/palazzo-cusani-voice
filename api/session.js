@@ -37,7 +37,6 @@ export default async function handler(req, res) {
         session: {
           type: "realtime",
           model: "gpt-realtime",
-          output_modalities: ["audio"],
           instructions,
           audio: {
             input: {
@@ -45,10 +44,10 @@ export default async function handler(req, res) {
                 type: "near_field",
               },
               transcription: {
-                model: "gpt-4o-mini-transcribe",
+                model: "gpt-4o-transcribe",
                 language: "it",
                 prompt:
-                  "Conversazione in italiano per Palazzo Cusani a Milano. Nomi propri, prenotazioni, eventi, persone, pranzo, cena, orari e date.",
+                  "Trascrivi solo italiano parlato per Palazzo Cusani a Milano. Se senti silenzio, rumore, musica o parole non italiane, non inventare testo. Termini utili: Adriana, Palazzo Cusani, prenotazione, tavolo, evento, pranzo, cena, orari, date, persone, bambini, allergie, foresteria, parcheggio.",
               },
               turn_detection: {
                 type: "server_vad",
