@@ -3,6 +3,7 @@ let stream;
 let audio;
 let eventsChannel;
 let silenceTimer;
+let greetingTimer;
 let whatsappFailsafeTimer;
 let isActive = false;
 let greeted = false;
@@ -247,6 +248,7 @@ function setActive(active) {
 
 function stopCall() {
   clearSilenceTimer();
+  clearGreetingTimer();
   sendCallTranscript();
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
@@ -279,6 +281,29 @@ function clearSilenceTimer() {
   if (silenceTimer) {
     clearTimeout(silenceTimer);
     silenceTimer = null;
+  }
+}
+function scheduleAssistantGreeting(attempt = 0) {
+  clearGreetingTimer();
+
+  greetingTimer = setTimeout(() => {
+    if (!pc || pc.connectionState !== "connected" || greeted) return;
+
+    if (eventsChannel?.readyState === "open") {
+      askAssistantToGreet();
+      return;
+    }
+
+    if (attempt < 8) {
+      scheduleAssistantGreeting(attempt + 1);
+    }
+  }, attempt === 0 ? 1400 : 250);
+}
+
+function clearGreetingTimer() {
+  if (greetingTimer) {
+    clearTimeout(greetingTimer);
+    greetingTimer = null;
   }
 }
 
@@ -943,7 +968,7 @@ function askAssistantToGreet() {
         type: "response.create",
         response: {
           instructions:
-            "Presentati in modo naturale e brevissimo: 'Buongiorno, sono Adriana di Palazzo Cusani. Mi dica pure.' Poi fermati e ascolta.",
+            "Pronuncia solo questa frase, una volta sola: 'Palazzo Cusani, sono Adriana. Dica pure.' Poi resta in silenzio e ascolta.",
         },
       })
     );
@@ -1019,6 +1044,7 @@ btn.onclick = async () => {
         setActive(true);
         hideStatus();
         resetSilenceTimer();
+        scheduleAssistantGreeting();
       }
 
       if (["failed", "disconnected", "closed"].includes(pc?.connectionState)) {
@@ -1027,10 +1053,7 @@ btn.onclick = async () => {
     };
 
     eventsChannel = pc.createDataChannel("oai-events");
-    eventsChannel.addEventListener("open", () => {
-  setTimeout(askAssistantToGreet, 900);
-});
-    eventsChannel.addEventListener("message", handleRealtimeEvent);
+eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
