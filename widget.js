@@ -18,7 +18,7 @@ const SCRIPT_URL = document.currentScript?.src || window.location.href;
 const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
 const LEAD_URL = new URL("api/lead", BASE_URL).toString();
-const BUTTON_IMAGE_URL = new URL("adriana-voice.svg?v=2", BASE_URL).toString();
+const BUTTON_IMAGE_URL = new URL("adriana-voice.svg?v=3", BASE_URL).toString();
 
 const notes = [];
 const lead = {
