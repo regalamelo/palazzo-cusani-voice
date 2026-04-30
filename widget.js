@@ -7,6 +7,7 @@ let idleTimer;
 let responseResetTimer;
 let ambienceAudio;
 let ambienceFadeTimer;
+let isConnecting = false;
 let isActive = false;
 let privacyAccepted = false;
 let greetingSent = false;
@@ -363,6 +364,7 @@ function setActive(active) {
 }
 
 function stopCall() {
+  isConnecting = false;
   clearTimeout(silenceTimer);
   clearTimeout(idleTimer);
   clearTimeout(responseResetTimer);
@@ -922,6 +924,26 @@ async function sendCallTranscript() {
   }
 }
 
+function getCallStartErrorMessage(error) {
+  const name = error?.name || "";
+  const message = error?.message || "";
+  const lowerMessage = message.toLowerCase();
+
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return 'Microfono non accessibile. Consenti il microfono nel browser. Se il widget e dentro un iframe, serve allow="microphone".';
+  }
+
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "Nessun microfono trovato su questo dispositivo.";
+  }
+
+  if (lowerMessage.includes("permission") || lowerMessage.includes("microphone")) {
+    return 'Microfono non accessibile. Controlla i permessi del browser e, se il widget e dentro un iframe, serve allow="microphone".';
+  }
+
+  return "Errore: " + (message || "impossibile avviare l'assistente");
+}
+
 privacyStart.onclick = () => {
   if (!privacyCheck.checked) {
     alert("Per iniziare deve accettare privacy e dichiarazione di eta.");
@@ -939,6 +961,11 @@ btn.onclick = async () => {
     return;
   }
 
+  if (isConnecting) {
+    showStatus("Connessione gia in corso...");
+    return;
+  }
+
   if (!privacyAccepted) {
     hideStatus();
     startAmbience(AMBIENCE_PREVIEW_VOLUME);
@@ -947,6 +974,7 @@ btn.onclick = async () => {
   }
 
   try {
+    isConnecting = true;
     resetLead();
     startAmbience(AMBIENCE_CALL_VOLUME);
     widget.classList.add("is-active");
@@ -973,6 +1001,7 @@ btn.onclick = async () => {
 
     pc.onconnectionstatechange = () => {
       if (pc?.connectionState === "connected") {
+        isConnecting = false;
         setActive(true);
         hideStatus();
         resetSilenceTimer();
@@ -1015,8 +1044,9 @@ btn.onclick = async () => {
     const answer = await sdpRes.text();
     await pc.setRemoteDescription({ type: "answer", sdp: answer });
   } catch (error) {
+    const message = getCallStartErrorMessage(error);
     console.error(error);
-    alert("Errore: " + error.message);
+    alert(message);
     stopCall();
   }
 };
