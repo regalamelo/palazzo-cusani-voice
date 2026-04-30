@@ -72,12 +72,12 @@ actions.appendChild(whatsapp);
 const generalEmail = createAction(GENERAL_EMAIL, "pc-voice-email");
 actions.appendChild(generalEmail);
 
-const parkingEmail = createAction(PARKING_EMAIL, "pc-voice-email");
-parkingEmail.href =
+const defenseEmail = createAction(PARKING_EMAIL, "pc-voice-email");
+defenseEmail.href =
   "mailto:" +
   PARKING_EMAIL +
-  "?subject=Richiesta%20parcheggio%20Palazzo%20Cusani";
-actions.appendChild(parkingEmail);
+  "?subject=Richiesta%20Palazzo%20Cusani";
+actions.appendChild(defenseEmail);
 
 const style = document.createElement("style");
 style.innerHTML = `
@@ -208,7 +208,7 @@ function hideStatus() {
 function hideActionButtons() {
   whatsapp.style.display = "none";
   generalEmail.style.display = "none";
-  parkingEmail.style.display = "none";
+  defenseEmail.style.display = "none";
 }
 
 function resetLeadState() {
@@ -804,8 +804,20 @@ function showGeneralEmail() {
   generalEmail.style.display = "block";
 }
 
-function showParkingEmail() {
-  parkingEmail.style.display = "block";
+function showDefenseEmail(topic = "Palazzo Cusani") {
+  const subject =
+    topic === "foresteria"
+      ? "Richiesta foresteria Palazzo Cusani"
+      : topic === "parcheggio"
+        ? "Richiesta parcheggio Palazzo Cusani"
+        : "Richiesta Palazzo Cusani";
+
+  defenseEmail.href =
+    "mailto:" +
+    PARKING_EMAIL +
+    "?subject=" +
+    encodeURIComponent(subject);
+  defenseEmail.style.display = "block";
 }
 
 function textLooksLikeEmailRequest(text) {
@@ -822,6 +834,21 @@ function textLooksLikeEmailRequest(text) {
 function textLooksLikeParkingRequest(text) {
   const normalized = text.toLowerCase();
   return normalized.includes("parcheggio") || normalized.includes("parcheggiare");
+}
+
+function textLooksLikeForesteriaRequest(text) {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("foresteria") ||
+    normalized.includes("camera") ||
+    normalized.includes("camere") ||
+    normalized.includes("alloggio") ||
+    normalized.includes("alloggi") ||
+    normalized.includes("dormire") ||
+    normalized.includes("pernottare") ||
+    normalized.includes("pernottamento") ||
+    normalized.includes("soggiornare")
+  );
 }
 
 function textLooksLikeBookingRequest(text) {
@@ -943,7 +970,11 @@ function handleRealtimeEvent(message) {
   }
 
   if (textLooksLikeParkingRequest(text)) {
-    showParkingEmail();
+    showDefenseEmail("parcheggio");
+  }
+
+  if (textLooksLikeForesteriaRequest(text)) {
+    showDefenseEmail("foresteria");
   }
 }
 
