@@ -36,21 +36,32 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         session: {
           type: "realtime",
-          model: "gpt-realtime-mini",
+          model: "gpt-realtime",
           output_modalities: ["audio"],
           instructions,
           audio: {
             input: {
+              noise_reduction: {
+                type: "near_field",
+              },
               transcription: {
                 model: "gpt-4o-mini-transcribe",
+                language: "it",
+                prompt:
+                  "Conversazione in italiano per Palazzo Cusani a Milano. Nomi propri, prenotazioni, eventi, persone, pranzo, cena, orari e date.",
               },
               turn_detection: {
                 type: "server_vad",
+                threshold: 0.64,
+                prefix_padding_ms: 300,
+                silence_duration_ms: 750,
                 create_response: false,
+                interrupt_response: true,
               },
             },
             output: {
               voice: "marin",
+              speed: 0.92,
             },
           },
         },
