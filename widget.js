@@ -3,14 +3,16 @@ let stream;
 let audio;
 let eventsChannel;
 let silenceTimer;
-let greetingTimer;
 let whatsappFailsafeTimer;
 let isActive = false;
-let greeted = false;
 let callTranscriptSent = false;
 let whatsappIntentSeen = false;
 let whatsappForcedVisible = false;
 let privacyAccepted = false;
+let ambienceContext = null;
+let ambienceGain = null;
+let ambienceNodes = [];
+let ambienceTimers = [];
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -278,6 +280,185 @@ function hidePrivacyBox() {
   privacyBox.style.display = "none";
 }
 
+function startRestaurantAmbience() {
+  if (ambienceContext) {
+    ambienceContext.resume?.();
+    return;
+  }
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  try {
+    ambienceContext = new AudioContextClass();
+    ambienceGain = ambienceContext.createGain();
+    ambienceGain.gain.setValueAtTime(0.0001, ambienceContext.currentTime);
+    ambienceGain.gain.linearRampToValueAtTime(0.018, ambienceContext.currentTime + 0.8);
+    ambienceGain.connect(ambienceContext.destination);
+
+    createRoomTone();
+    createSoftMurmur();
+    scheduleSoftClink();
+  } catch (error) {
+    console.warn("Restaurant ambience not available", error);
+    stopRestaurantAmbience();
+  }
+}
+
+function createRoomTone() {
+  const seconds = 2;
+  const sampleRate = ambienceContext.sampleRate;
+  const buffer = ambienceContext.createBuffer(1, sampleRate * seconds, sampleRate);
+  const data = buffer.getChannelData(0);
+  let lastValue = 0;
+
+  for (let i = 0; i < data.length; i += 1) {
+    lastValue = lastValue * 0.985 + (Math.random() * 2 - 1) * 0.015;
+    data[i] = lastValue * 0.42;
+  }
+
+  const source = ambienceContext.createBufferSource();
+  const lowpass = ambienceContext.createBiquadFilter();
+  const highpass = ambienceContext.createBiquadFilter();
+  const gain = ambienceContext.createGain();
+
+  source.buffer = buffer;
+  source.loop = true;
+  highpass.type = "highpass";
+  highpass.frequency.value = 120;
+  lowpass.type = "lowpass";
+  lowpass.frequency.value = 1450;
+  gain.gain.value = 0.34;
+
+  source.connect(highpass);
+  highpass.connect(lowpass);
+  lowpass.connect(gain);
+  gain.connect(ambienceGain);
+  source.start();
+
+  ambienceNodes.push(source, lowpass, highpass, gain);
+}
+
+function createSoftMurmur() {
+  [185, 245, 310].forEach((frequency, index) => {
+    const oscillator = ambienceContext.createOscillator();
+    const filter = ambienceContext.createBiquadFilter();
+    const gain = ambienceContext.createGain();
+
+    oscillator.type = index === 1 ? "triangle" : "sine";
+    oscillator.frequency.value = frequency;
+    filter.type = "bandpass";
+    filter.frequency.value = frequency * 1.7;
+    filter.Q.value = 0.7;
+    gain.gain.value = 0.0026;
+
+    oscillator.connect(filter);
+    filter.connect(gain);
+    gain.connect(ambienceGain);
+    oscillator.start();
+
+    ambienceNodes.push(oscillator, filter, gain);
+  });
+}
+
+function scheduleSoftClink() {
+  if (!ambienceContext || !ambienceGain) return;
+
+  const delay = 1800 + Math.random() * 3200;
+  const timer = setTimeout(() => {
+    playSoftClink();
+    scheduleSoftClink();
+  }, delay);
+
+  ambienceTimers.push(timer);
+}
+
+function playSoftClink() {
+  if (!ambienceContext || !ambienceGain) return;
+
+  const now = ambienceContext.currentTime;
+  const oscillator = ambienceContext.createOscillator();
+  const gain = ambienceContext.createGain();
+  const filter = ambienceContext.createBiquadFilter();
+
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(1050 + Math.random() * 650, now);
+  filter.type = "highpass";
+  filter.frequency.value = 850;
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.009, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+
+  oscillator.connect(filter);
+  filter.connect(gain);
+  gain.connect(ambienceGain);
+  oscillator.start(now);
+  oscillator.stop(now + 0.2);
+
+  ambienceNodes.push(oscillator, filter, gain);
+}
+
+function stopRestaurantAmbience() {
+  ambienceTimers.forEach((timer) => clearTimeout(timer));
+  ambienceTimers = [];
+
+  if (!ambienceContext) return;
+
+  const contextToClose = ambienceContext;
+  const nodesToStop = ambienceNodes;
+
+  try {
+    if (ambienceGain) {
+      ambienceGain.gain.cancelScheduledValues(contextToClose.currentTime);
+      ambienceGain.gain.setValueAtTime(ambienceGain.gain.value, contextToClose.currentTime);
+      ambienceGain.gain.linearRampToValueAtTime(0.0001, contextToClose.currentTime + 0.25);
+    }
+
+    setTimeout(() => {
+      nodesToStop.forEach((node) => {
+        try {
+          node.stop?.();
+          node.disconnect?.();
+        } catch {}
+      });
+      contextToClose.close?.();
+    }, 280);
+  } catch (error) {
+    console.warn("Restaurant ambience stop failed", error);
+  }
+
+  ambienceContext = null;
+  ambienceGain = null;
+  ambienceNodes = [];
+}
+
+function playIntroGreeting() {
+  return new Promise((resolve) => {
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      resolve();
+      return;
+    }
+
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      resolve();
+    };
+
+    const greeting = new SpeechSynthesisUtterance("Sono Adriana di Palazzo Cusani. Mi dica pure.");
+    greeting.lang = "it-IT";
+    greeting.rate = 1.03;
+    greeting.pitch = 1;
+    greeting.onend = finish;
+    greeting.onerror = finish;
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(greeting);
+    setTimeout(finish, 3500);
+  });
+}
+
 function resetLeadState() {
   clearWhatsAppFailsafe();
   notes.length = 0;
@@ -313,7 +494,7 @@ function setActive(active) {
 
 function stopCall() {
   clearSilenceTimer();
-  clearGreetingTimer();
+  stopRestaurantAmbience();
   sendCallTranscript();
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
@@ -322,7 +503,6 @@ function stopCall() {
   stream = null;
   audio = null;
   eventsChannel = null;
-  greeted = false;
   setActive(false);
 
   if (hasCommercialIntent()) {
@@ -346,30 +526,6 @@ function clearSilenceTimer() {
   if (silenceTimer) {
     clearTimeout(silenceTimer);
     silenceTimer = null;
-  }
-}
-
-function scheduleAssistantGreeting(attempt = 0) {
-  clearGreetingTimer();
-
-  greetingTimer = setTimeout(() => {
-    if (!pc || pc.connectionState !== "connected" || greeted) return;
-
-    if (eventsChannel?.readyState === "open") {
-      askAssistantToGreet();
-      return;
-    }
-
-    if (attempt < 8) {
-      scheduleAssistantGreeting(attempt + 1);
-    }
-  }, attempt === 0 ? 350 : 250);
-}
-
-function clearGreetingTimer() {
-  if (greetingTimer) {
-    clearTimeout(greetingTimer);
-    greetingTimer = null;
   }
 }
 
@@ -412,7 +568,7 @@ function updateLeadFromText(text) {
   const capturedName = getNameFromText(text);
   if (capturedName && (!lead.name || textLooksLikeExplicitName(text))) {
     lead.name = capturedName;
-  } else if (!lead.name && looksLikeNameAnswer(text)) {
+  } else if (!lead.name && looksLikeNameAnswer(text) && !textLooksLikeAdditionalNote(text)) {
     lead.name = cleanCapturedValue(text);
   }
 
@@ -564,6 +720,79 @@ function getDateFromText(text) {
   return "";
 }
 
+function formatDateForMessage(value) {
+  const cleaned = cleanText(value);
+  const normalized = normalizeDateText(cleaned);
+
+  if (normalized === "oggi") {
+    return `${cleaned} ${formatDateValue(new Date())}`;
+  }
+
+  if (normalized === "domani") {
+    return `${cleaned} ${formatDateValue(addDays(new Date(), 1))}`;
+  }
+
+  if (normalized === "dopodomani") {
+    return `${cleaned} ${formatDateValue(addDays(new Date(), 2))}`;
+  }
+
+  const weekdayIndex = getWeekdayIndex(normalized);
+  if (weekdayIndex !== null && !/\d/.test(cleaned)) {
+    return `${cleaned} ${formatDateValue(getNextWeekdayDate(weekdayIndex))}`;
+  }
+
+  return cleaned;
+}
+
+function normalizeDateText(value) {
+  return value
+    .toLowerCase()
+    .replace(/[ìí]/g, "i")
+    .replace(/[èé]/g, "e")
+    .trim();
+}
+
+function getWeekdayIndex(value) {
+  const weekdays = {
+    domenica: 0,
+    lunedi: 1,
+    martedi: 2,
+    mercoledi: 3,
+    giovedi: 4,
+    venerdi: 5,
+    sabato: 6,
+  };
+
+  return Object.prototype.hasOwnProperty.call(weekdays, value) ? weekdays[value] : null;
+}
+
+function getNextWeekdayDate(weekdayIndex) {
+  const today = new Date();
+  const result = new Date(today);
+  let daysToAdd = (weekdayIndex - today.getDay() + 7) % 7;
+
+  if (daysToAdd === 0) {
+    daysToAdd = 7;
+  }
+
+  result.setDate(today.getDate() + daysToAdd);
+  return result;
+}
+
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(date.getDate() + days);
+  return result;
+}
+
+function formatDateValue(date) {
+  return new Intl.DateTimeFormat("it-IT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
 function cleanText(value) {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -577,13 +806,28 @@ function cleanCapturedValue(value) {
 }
 
 function formatTimeValue(hour, minutes = "00") {
-  return `${String(Number(hour)).padStart(2, "0")}:${minutes || "00"}`;
+  return `${String(normalizeHourForMeal(hour)).padStart(2, "0")}:${minutes || "00"}`;
+}
+
+function normalizeHourForMeal(hour) {
+  let numericHour = Number(hour);
+
+  if (lead.meal === "cena" && numericHour >= 1 && numericHour <= 11) {
+    numericHour += 12;
+  }
+
+  if (lead.meal === "pranzo" && numericHour >= 1 && numericHour <= 4) {
+    numericHour += 12;
+  }
+
+  return numericHour;
 }
 
 function looksLikeNameAnswer(text) {
   const normalized = text.toLowerCase().trim();
   if (!/^[a-zA-ZÀ-ÿ' ]{4,50}$/.test(text.trim())) return false;
   if (normalized.split(/\s+/).length > 4) return false;
+  if (textLooksLikeAdditionalNote(text)) return false;
 
   return ![
     "trener",
@@ -608,6 +852,25 @@ function looksLikeNameAnswer(text) {
     "persone",
     "numero",
     "quante",
+    "anche",
+    "bambino",
+    "bambini",
+    "bambina",
+    "bambine",
+    "bimbo",
+    "bimbi",
+    "adulti",
+    "ragazzi",
+    "seggiolone",
+    "passeggino",
+    "allergia",
+    "allergie",
+    "intolleranza",
+    "intolleranze",
+    "celiaco",
+    "celiaci",
+    "vegetariano",
+    "vegano",
     "adriana",
     "palazzo",
     "cusani",
@@ -678,6 +941,37 @@ function looksLikeMisheardPeople(text) {
   return /\b(trener|trenta|trentine|trentina|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)\b/i.test(text);
 }
 
+function textLooksLikeAdditionalNote(text) {
+  const normalized = text.toLowerCase();
+
+  return /\b(anche|bambin\w*|bimb\w*|ragazz\w*|adult\w*|seggiolone|passeggino|allerg\w*|intoller\w*|celiac\w*|vegetarian\w*|vegan\w*|carrozzina|disabil\w*|sedia a rotelle|torta|candeline|anniversario|compleanno|cane|animale|nota|note|aggiungo|in piu|in più)\b/i.test(normalized);
+}
+
+function getCustomerNotes() {
+  const importantNotes = notes
+    .filter((note) => textLooksLikeAdditionalNote(note))
+    .map(cleanText)
+    .filter((note) => note && note.toLowerCase() !== (lead.name || "").toLowerCase());
+
+  return [...new Set(importantNotes)].join("; ");
+}
+
+function getPublicSummary() {
+  return [
+    `Tipo richiesta: ${lead.intent || "richiesta"}`,
+    lead.occasion ? `Occasione: ${lead.occasion}` : "",
+    lead.name ? `Nome: ${lead.name}` : "",
+    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
+    lead.email ? `Email cliente: ${lead.email}` : "",
+    lead.day ? `Giorno/data: ${formatDateForMessage(lead.day)}` : "",
+    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
+    lead.time ? `Ora: ${lead.time}` : "",
+    lead.people ? `Persone: ${lead.people}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function getContactRequestBody() {
   refreshLeadFromNotes();
 
@@ -696,6 +990,7 @@ function refreshLeadFromNotes() {
 }
 
 function getWhatsappSummary() {
+  const customerNotes = getCustomerNotes();
   const requestLabel =
     lead.intent === "evento"
       ? "evento / ricorrenza"
@@ -706,11 +1001,12 @@ function getWhatsappSummary() {
   return [
     `Richiesta: ${requestLabel}`,
     lead.occasion ? `Occasione: ${lead.occasion}` : "",
-    lead.day ? `Data: ${lead.day}` : "",
+    lead.day ? `Data: ${formatDateForMessage(lead.day)}` : "",
     lead.meal ? `Servizio: ${lead.meal}` : "",
     lead.time ? `Orario: ${lead.time}` : "",
     lead.people ? `Persone: ${lead.people}` : "",
     lead.name ? `Nome: ${lead.name}` : "",
+    customerNotes ? `Note: ${customerNotes}` : "",
     getMissingWhatsappFields(),
   ]
     .filter(Boolean)
@@ -740,7 +1036,7 @@ function getInternalSummary() {
     `Nome: ${lead.name || "non rilevato"}`,
     `WhatsApp/telefono cliente: ${lead.phone || "non rilevato"}`,
     `Email cliente: ${lead.email || "non rilevato"}`,
-    `Giorno: ${lead.day || "non rilevato"}`,
+    `Giorno: ${lead.day ? formatDateForMessage(lead.day) : "non rilevato"}`,
     `Pranzo/cena: ${lead.meal || "non rilevato"}`,
     `Ora: ${lead.time || "non rilevato"}`,
     `Persone: ${lead.people || "non rilevato"}`,
@@ -763,6 +1059,29 @@ function hasCommercialIntent() {
     lead.intent === "prenotazione" ||
     lead.intent === "evento" ||
     notes.some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note))
+  );
+}
+
+function countConversationSignals() {
+  const text = notes.join(" ").toLowerCase();
+  const signals = [
+    lead.day || /\b(oggi|domani|dopodomani|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica|\d{1,2}[/-]\d{1,2})\b/i.test(text),
+    lead.meal || /\b(pranzo|cena|sera|stasera)\b/i.test(text),
+    lead.time || /\b(alle|ore)\s*([01]?\d|2[0-3])\b/i.test(text),
+    lead.people || /\b(\d{1,3})\s*(persone|ospiti|coperti)\b/i.test(text) || /\b(per|siamo|saremo|in)\s+\d{1,3}\b/i.test(text),
+    lead.name || /\b(mi chiamo|sono|nome|a nome di)\b/i.test(text),
+    lead.occasion || textLooksLikeEventRequest(text),
+  ];
+
+  return signals.filter(Boolean).length;
+}
+
+function userAskedForConfirmation() {
+  const text = notes.join(" ").toLowerCase();
+
+  return (
+    notes.length >= 2 &&
+    /\b(whatsapp|conferma|confermare|messaggio|invia|mandare|prenotazione|ricontatto)\b/i.test(text)
   );
 }
 
@@ -1000,27 +1319,6 @@ function getEventText(event) {
   return textParts.join(" ");
 }
 
-function askAssistantToGreet() {
-  if (!eventsChannel || greeted || eventsChannel.readyState !== "open") return;
-
-  greeted = true;
-
-  try {
-    eventsChannel.send(
-      JSON.stringify({
-        type: "response.create",
-        response: {
-          modalities: ["audio"],
-          instructions:
-            "Apertura della chiamata. Pronuncia ESATTAMENTE e SOLO questa frase: 'Sono Adriana di Palazzo Cusani. Mi dica pure.' Non aggiungere nessuna parola prima o dopo. Vietato dire: certamente, certo, ok, va bene, perfetto.",
-        },
-      })
-    );
-  } catch (error) {
-    console.warn("Greeting not sent", error);
-  }
-}
-
 function handleRealtimeEvent(message) {
   let event;
 
@@ -1067,13 +1365,17 @@ btn.onclick = async () => {
 
   if (!privacyAccepted) {
     hideStatus();
+    startRestaurantAmbience();
     showPrivacyBox();
     return;
   }
 
   try {
+    stopRestaurantAmbience();
     resetLeadState();
     widget.classList.add("is-active");
+    showStatus("Avvio assistente...");
+    await playIntroGreeting();
     showStatus("Richiesta microfono...");
 
     const tokenRes = await fetch(SESSION_URL, { method: "POST" });
@@ -1105,7 +1407,6 @@ btn.onclick = async () => {
         setActive(true);
         hideStatus();
         resetSilenceTimer();
-        scheduleAssistantGreeting();
       }
 
       if (["failed", "disconnected", "closed"].includes(pc?.connectionState)) {
@@ -1114,9 +1415,6 @@ btn.onclick = async () => {
     };
 
     eventsChannel = pc.createDataChannel("oai-events");
-    eventsChannel.addEventListener("open", () => {
-      scheduleAssistantGreeting();
-    });
     eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
