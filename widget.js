@@ -1053,7 +1053,7 @@ btn.onclick = async () => {
     };
 
     eventsChannel = pc.createDataChannel("oai-events");
-eventsChannel.addEventListener("message", handleRealtimeEvent);
+    eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
