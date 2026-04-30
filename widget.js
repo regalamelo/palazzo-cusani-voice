@@ -962,19 +962,30 @@ function askAssistantToGreet() {
 
   greeted = true;
 
+  const micTracks = stream?.getAudioTracks?.() || [];
+  micTracks.forEach((track) => {
+    track.enabled = false;
+  });
+
   try {
     eventsChannel.send(
       JSON.stringify({
         type: "response.create",
         response: {
           instructions:
-            "Pronuncia solo questa frase, una volta sola: 'Palazzo Cusani, sono Adriana. Dica pure.' Poi resta in silenzio e ascolta.",
+            "Di' solo: 'Palazzo Cusani, sono Adriana. Dica pure.'",
         },
       })
     );
   } catch (error) {
     console.warn("Greeting not sent", error);
   }
+
+  setTimeout(() => {
+    micTracks.forEach((track) => {
+      track.enabled = true;
+    });
+  }, 3200);
 }
 
 function handleRealtimeEvent(message) {
