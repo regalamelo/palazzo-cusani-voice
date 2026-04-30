@@ -13,6 +13,13 @@ let ambienceContext = null;
 let ambienceGain = null;
 let ambienceNodes = [];
 let ambienceTimers = [];
+let ambienceDuckTimer = null;
+let ambienceAudio = null;
+let ambienceAudioFadeTimer = null;
+
+const AMBIENCE_PREVIEW_VOLUME = 0.14;
+const AMBIENCE_CALL_VOLUME = 0.028;
+const AMBIENCE_DUCK_VOLUME = 0.003;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -23,6 +30,7 @@ const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
 const LEAD_URL = new URL("api/lead", BASE_URL).toString();
 const BUTTON_IMAGE_URL = new URL("adriana-voice2.gif?v=3", BASE_URL).toString();
+const AMBIENCE_AUDIO_URL = new URL("restaurant-ambience.mp3?v=1", BASE_URL).toString();
 
 const notes = [];
 const lead = {
@@ -281,8 +289,38 @@ function hidePrivacyBox() {
 }
 
 function startRestaurantAmbience() {
+  if (ambienceAudio) {
+    ambienceAudio.play().catch(() => {});
+    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.3);
+    return;
+  }
+
   if (ambienceContext) {
     ambienceContext.resume?.();
+    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.3);
+    return;
+  }
+
+  ambienceAudio = new Audio(AMBIENCE_AUDIO_URL);
+  ambienceAudio.loop = true;
+  ambienceAudio.preload = "auto";
+  ambienceAudio.volume = 0;
+
+  ambienceAudio
+    .play()
+    .then(() => {
+      setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.8);
+    })
+    .catch(() => {
+      ambienceAudio = null;
+      startGeneratedRestaurantAmbience();
+    });
+}
+
+function startGeneratedRestaurantAmbience() {
+  if (ambienceContext) {
+    ambienceContext.resume?.();
+    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.3);
     return;
   }
 
@@ -293,7 +331,7 @@ function startRestaurantAmbience() {
     ambienceContext = new AudioContextClass();
     ambienceGain = ambienceContext.createGain();
     ambienceGain.gain.setValueAtTime(0.0001, ambienceContext.currentTime);
-    ambienceGain.gain.linearRampToValueAtTime(0.018, ambienceContext.currentTime + 0.8);
+    ambienceGain.gain.linearRampToValueAtTime(AMBIENCE_PREVIEW_VOLUME, ambienceContext.currentTime + 0.8);
     ambienceGain.connect(ambienceContext.destination);
 
     createRoomTone();
@@ -302,6 +340,98 @@ function startRestaurantAmbience() {
   } catch (error) {
     console.warn("Restaurant ambience not available", error);
     stopRestaurantAmbience();
+  }
+}
+
+function setRestaurantAmbienceVolume(volume, seconds = 0.25) {
+  if (ambienceAudio) {
+    fadeRestaurantAudioTo(volume, seconds);
+  }
+
+  if (!ambienceContext || !ambienceGain) return;
+
+  const now = ambienceContext.currentTime;
+  ambienceGain.gain.cancelScheduledValues(now);
+  ambienceGain.gain.setValueAtTime(ambienceGain.gain.value, now);
+  ambienceGain.gain.linearRampToValueAtTime(volume, now + seconds);
+}
+
+function fadeRestaurantAudioTo(volume, seconds = 0.25) {
+  if (!ambienceAudio) return;
+
+  if (ambienceAudioFadeTimer) {
+    clearInterval(ambienceAudioFadeTimer);
+    ambienceAudioFadeTimer = null;
+  }
+
+  const startVolume = ambienceAudio.volume;
+  const targetVolume = Math.max(0, Math.min(1, volume));
+  const startedAt = performance.now();
+  const duration = Math.max(80, seconds * 1000);
+
+  ambienceAudioFadeTimer = setInterval(() => {
+    if (!ambienceAudio) {
+      clearInterval(ambienceAudioFadeTimer);
+      ambienceAudioFadeTimer = null;
+      return;
+    }
+
+    const progress = Math.min(1, (performance.now() - startedAt) / duration);
+    ambienceAudio.volume = startVolume + (targetVolume - startVolume) * progress;
+
+    if (progress >= 1) {
+      clearInterval(ambienceAudioFadeTimer);
+      ambienceAudioFadeTimer = null;
+    }
+  }, 40);
+}
+
+function duckRestaurantAmbience() {
+  if (!ambienceContext && !ambienceAudio) return;
+
+  if (ambienceDuckTimer) {
+    clearTimeout(ambienceDuckTimer);
+    ambienceDuckTimer = null;
+  }
+
+  setRestaurantAmbienceVolume(AMBIENCE_DUCK_VOLUME, 0.12);
+}
+
+function restoreRestaurantAmbience(delay = 700) {
+  if (!ambienceContext && !ambienceAudio) return;
+
+  if (ambienceDuckTimer) {
+    clearTimeout(ambienceDuckTimer);
+  }
+
+  ambienceDuckTimer = setTimeout(() => {
+    if (!ambienceContext && !ambienceAudio) return;
+    setRestaurantAmbienceVolume(isActive ? AMBIENCE_CALL_VOLUME : AMBIENCE_PREVIEW_VOLUME, 0.6);
+    ambienceDuckTimer = null;
+  }, delay);
+}
+
+function handleAmbienceForRealtimeEvent(event) {
+  const type = event?.type || "";
+  const assistantRole = event?.item?.role === "assistant" || event?.response?.role === "assistant";
+
+  if (
+    type.includes("speech_stopped") ||
+    type.includes("response.audio.done") ||
+    type.includes("response.done") ||
+    type.includes("output_audio_buffer.stopped")
+  ) {
+    restoreRestaurantAmbience(type.includes("speech_stopped") ? 500 : 900);
+    return;
+  }
+
+  if (
+    type.includes("speech_started") ||
+    type.includes("response.audio.delta") ||
+    type.includes("output_audio_buffer.started") ||
+    assistantRole
+  ) {
+    duckRestaurantAmbience();
   }
 }
 
@@ -399,6 +529,27 @@ function playSoftClink() {
 }
 
 function stopRestaurantAmbience() {
+  if (ambienceDuckTimer) {
+    clearTimeout(ambienceDuckTimer);
+    ambienceDuckTimer = null;
+  }
+
+  if (ambienceAudioFadeTimer) {
+    clearInterval(ambienceAudioFadeTimer);
+    ambienceAudioFadeTimer = null;
+  }
+
+  if (ambienceAudio) {
+    try {
+      ambienceAudio.pause();
+      ambienceAudio.currentTime = 0;
+      ambienceAudio.removeAttribute("src");
+      ambienceAudio.load();
+    } catch {}
+
+    ambienceAudio = null;
+  }
+
   ambienceTimers.forEach((timer) => clearTimeout(timer));
   ambienceTimers = [];
 
@@ -430,33 +581,6 @@ function stopRestaurantAmbience() {
   ambienceContext = null;
   ambienceGain = null;
   ambienceNodes = [];
-}
-
-function playIntroGreeting() {
-  return new Promise((resolve) => {
-    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
-      resolve();
-      return;
-    }
-
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      resolve();
-    };
-
-    const greeting = new SpeechSynthesisUtterance("Sono Adriana di Palazzo Cusani. Mi dica pure.");
-    greeting.lang = "it-IT";
-    greeting.rate = 1.03;
-    greeting.pitch = 1;
-    greeting.onend = finish;
-    greeting.onerror = finish;
-
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(greeting);
-    setTimeout(finish, 3500);
-  });
 }
 
 function resetLeadState() {
@@ -1328,6 +1452,8 @@ function handleRealtimeEvent(message) {
     return;
   }
 
+  handleAmbienceForRealtimeEvent(event);
+
   const text = getEventText(event);
   if (!text) return;
 
@@ -1371,11 +1497,10 @@ btn.onclick = async () => {
   }
 
   try {
-    stopRestaurantAmbience();
+    startRestaurantAmbience();
+    setRestaurantAmbienceVolume(AMBIENCE_CALL_VOLUME, 0.8);
     resetLeadState();
     widget.classList.add("is-active");
-    showStatus("Avvio assistente...");
-    await playIntroGreeting();
     showStatus("Richiesta microfono...");
 
     const tokenRes = await fetch(SESSION_URL, { method: "POST" });
@@ -1405,6 +1530,7 @@ btn.onclick = async () => {
     pc.onconnectionstatechange = () => {
       if (pc?.connectionState === "connected") {
         setActive(true);
+        setRestaurantAmbienceVolume(AMBIENCE_CALL_VOLUME, 0.6);
         hideStatus();
         resetSilenceTimer();
       }
