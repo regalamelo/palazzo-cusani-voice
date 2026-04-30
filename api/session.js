@@ -47,6 +47,8 @@ export default async function handler(req, res) {
               turn_detection: {
                 type: "server_vad",
                 create_response: true,
+                interrupt_response: false,
+                silence_duration_ms: 650,
               },
             },
             output: {
