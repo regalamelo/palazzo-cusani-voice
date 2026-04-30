@@ -1027,7 +1027,9 @@ btn.onclick = async () => {
     };
 
     eventsChannel = pc.createDataChannel("oai-events");
-    eventsChannel.addEventListener("open", askAssistantToGreet);
+    eventsChannel.addEventListener("open", () => {
+  setTimeout(askAssistantToGreet, 900);
+});
     eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
