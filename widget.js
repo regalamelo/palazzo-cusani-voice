@@ -18,7 +18,7 @@ const SCRIPT_URL = document.currentScript?.src || window.location.href;
 const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
 const LEAD_URL = new URL("api/lead", BASE_URL).toString();
-const BUTTON_IMAGE_URL = new URL("adriana-voice2.gif?v=1", BASE_URL).toString();
+const BUTTON_IMAGE_URL = new URL("adriana-voice2.gif?v=3", BASE_URL).toString();
 
 const notes = [];
 const lead = {
@@ -105,18 +105,19 @@ style.innerHTML = `
     background: transparent;
   }
 
-  .pc-voice-button-visual {
+    .pc-voice-button-visual {
     position: absolute;
     left: 50%;
     top: 0;
-    width: min(430px, calc(100vw - 24px));
-    height: min(430px, calc(100vw - 24px));
+    width: min(420px, calc(100vw - 24px));
+    height: min(420px, calc(100vw - 24px));
     transform: translateX(-50%);
     background-size: contain;
-    background-position: center;
+    background-position: 50% 50%;
     background-repeat: no-repeat;
-    filter: drop-shadow(0 16px 30px rgba(92, 130, 245, 0.26));
+    filter: none;
   }
+
 
   .pc-voice-button-label {
     position: absolute;
