@@ -4,7 +4,6 @@ let audio;
 let eventsChannel;
 let silenceTimer;
 let greetingTimer;
-let greetingUnmuteTimer;
 let whatsappFailsafeTimer;
 let isActive = false;
 let greeted = false;
@@ -12,7 +11,6 @@ let callTranscriptSent = false;
 let whatsappIntentSeen = false;
 let whatsappForcedVisible = false;
 let privacyAccepted = false;
-let greetingMicMuted = false;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -316,7 +314,6 @@ function setActive(active) {
 function stopCall() {
   clearSilenceTimer();
   clearGreetingTimer();
-  unmuteMicAfterGreeting();
   sendCallTranscript();
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
@@ -366,7 +363,7 @@ function scheduleAssistantGreeting(attempt = 0) {
     if (attempt < 8) {
       scheduleAssistantGreeting(attempt + 1);
     }
-  }, attempt === 0 ? 1600 : 250);
+  }, attempt === 0 ? 350 : 250);
 }
 
 function clearGreetingTimer() {
@@ -681,22 +678,6 @@ function looksLikeMisheardPeople(text) {
   return /\b(trener|trenta|trentine|trentina|quaranta|cinquanta|sessanta|settanta|ottanta|novanta|cento)\b/i.test(text);
 }
 
-function getPublicSummary() {
-  return [
-    `Tipo richiesta: ${lead.intent || "richiesta"}`,
-    lead.occasion ? `Occasione: ${lead.occasion}` : "",
-    lead.name ? `Nome: ${lead.name}` : "",
-    lead.phone ? `Contatto WhatsApp/telefono: ${lead.phone}` : "",
-    lead.email ? `Email cliente: ${lead.email}` : "",
-    lead.day ? `Giorno/data: ${lead.day}` : "",
-    lead.meal ? `Pranzo/cena: ${lead.meal}` : "",
-    lead.time ? `Ora: ${lead.time}` : "",
-    lead.people ? `Persone: ${lead.people}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function getContactRequestBody() {
   refreshLeadFromNotes();
 
@@ -782,29 +763,6 @@ function hasCommercialIntent() {
     lead.intent === "prenotazione" ||
     lead.intent === "evento" ||
     notes.some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note))
-  );
-}
-
-function countConversationSignals() {
-  const text = notes.join(" ").toLowerCase();
-  const signals = [
-    lead.day || /\b(oggi|domani|dopodomani|lunedi|lunedì|martedi|martedì|mercoledi|mercoledì|giovedi|giovedì|venerdi|venerdì|sabato|domenica|\d{1,2}[/-]\d{1,2})\b/i.test(text),
-    lead.meal || /\b(pranzo|cena|sera|stasera)\b/i.test(text),
-    lead.time || /\b(alle|ore)\s*([01]?\d|2[0-3])\b/i.test(text),
-    lead.people || /\b(\d{1,3})\s*(persone|ospiti|coperti)\b/i.test(text) || /\b(per|siamo|saremo|in)\s+\d{1,3}\b/i.test(text),
-    lead.name || /\b(mi chiamo|sono|nome|a nome di)\b/i.test(text),
-    lead.occasion || textLooksLikeEventRequest(text),
-  ];
-
-  return signals.filter(Boolean).length;
-}
-
-function userAskedForConfirmation() {
-  const text = notes.join(" ").toLowerCase();
-
-  return (
-    notes.length >= 2 &&
-    /\b(whatsapp|conferma|confermare|messaggio|invia|mandare|prenotazione|ricontatto)\b/i.test(text)
   );
 }
 
@@ -1046,7 +1004,6 @@ function askAssistantToGreet() {
   if (!eventsChannel || greeted || eventsChannel.readyState !== "open") return;
 
   greeted = true;
-  muteMicForGreeting(6000);
 
   try {
     eventsChannel.send(
@@ -1061,35 +1018,6 @@ function askAssistantToGreet() {
     );
   } catch (error) {
     console.warn("Greeting not sent", error);
-    unmuteMicAfterGreeting();
-  }
-}
-
-function muteMicForGreeting(timeout = 7000) {
-  greetingMicMuted = true;
-  stream?.getAudioTracks?.().forEach((track) => {
-    track.enabled = false;
-  });
-
-  clearGreetingUnmuteTimer();
-  greetingUnmuteTimer = setTimeout(unmuteMicAfterGreeting, timeout);
-}
-
-function unmuteMicAfterGreeting() {
-  clearGreetingUnmuteTimer();
-
-  if (!greetingMicMuted) return;
-
-  greetingMicMuted = false;
-  stream?.getAudioTracks?.().forEach((track) => {
-    track.enabled = true;
-  });
-}
-
-function clearGreetingUnmuteTimer() {
-  if (greetingUnmuteTimer) {
-    clearTimeout(greetingUnmuteTimer);
-    greetingUnmuteTimer = null;
   }
 }
 
@@ -1100,16 +1028,6 @@ function handleRealtimeEvent(message) {
     event = JSON.parse(message.data);
   } catch {
     return;
-  }
-
-  if (
-    greetingMicMuted &&
-    [
-      "response.audio.done",
-      "response.output_audio.done",
-    ].includes(event?.type)
-  ) {
-    unmuteMicAfterGreeting();
   }
 
   const text = getEventText(event);
@@ -1196,6 +1114,9 @@ btn.onclick = async () => {
     };
 
     eventsChannel = pc.createDataChannel("oai-events");
+    eventsChannel.addEventListener("open", () => {
+      scheduleAssistantGreeting();
+    });
     eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
@@ -1205,8 +1126,6 @@ btn.onclick = async () => {
         autoGainControl: true,
       },
     });
-
-    muteMicForGreeting(9000);
 
     stream.getTracks().forEach((track) => {
       pc.addTrack(track, stream);
