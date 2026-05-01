@@ -459,6 +459,9 @@ function requestAssistantResponse(text) {
         instructions:
           `L'utente ha detto esattamente: "${key}". Rispondi solo a questa frase. ` +
           "Non assumere che voglia prenotare se non lo dice chiaramente. " +
+          "Usa solo la base conoscenza: se non sai un dettaglio, non inventarlo. " +
+          "Non inventare mai email, reparti, disponibilita, parcheggi, costi o ricevimento. " +
+          "Se chiede del parcheggio, di' che e gestito dalla segreteria del circolo e che per maggiori informazioni deve mandare una mail alla segreteria del circolo. " +
           "Se saluta soltanto, rispondi solo: 'Mi dica pure.' " +
           "Se chiede di cosa ti occupi o cosa puoi fare, spiega in una frase che aiuti con informazioni su Palazzo Cusani, tavoli, eventi, orari, contatti, foresteria e parcheggio.",
       },
