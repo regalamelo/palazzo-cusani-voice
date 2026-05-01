@@ -12,11 +12,14 @@ let isActive = false;
 let privacyAccepted = false;
 let greetingSent = false;
 let idlePromptSent = false;
+let namePrompted = false;
+let awaitingNameAnswer = false;
 let responseInProgress = false;
 let transcriptSent = false;
 let whatsappForcedVisible = false;
 let lastResponseKey = "";
 let lastResponseAt = 0;
+let lastClarificationAt = 0;
 
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
@@ -344,6 +347,9 @@ function resetLead() {
   notes.length = 0;
   transcriptSent = false;
   whatsappForcedVisible = false;
+  namePrompted = false;
+  awaitingNameAnswer = false;
+  lastClarificationAt = 0;
   Object.assign(lead, {
     name: "",
     phone: "",
@@ -461,7 +467,11 @@ function requestAssistantResponse(text) {
           "Non assumere che voglia prenotare se non lo dice chiaramente. " +
           "Usa solo la base conoscenza: se non sai un dettaglio, non inventarlo. " +
           "Non inventare mai email, reparti, disponibilita, parcheggi, costi o ricevimento. " +
+          "Se chiede un'informazione che non e nella base conoscenza, di' che non hai quel dettaglio e che puo inviare quella richiesta dal bottone WhatsApp gia compilato per ricevere risposta nel piu breve tempo possibile. " +
           "Se chiede del parcheggio, di' che e gestito dalla segreteria del circolo e che per maggiori informazioni deve mandare una mail alla segreteria del circolo. " +
+          "Se l'utente dice 'pronto', 'ci sei' o 'mi senti', rispondi solo: 'Si, ci sono.' " +
+          "Se l'utente ha appena detto solo il nome, rispondi solo: 'Mi dica pure.' " +
+          "Se non hai sentito o la frase e poco chiara, rispondi solo: 'Non ho sentito bene, puo ripetere?' " +
           "Se saluta soltanto, rispondi solo: 'Mi dica pure.' " +
           "Se chiede di cosa ti occupi o cosa puoi fare, spiega in una frase che aiuti con informazioni su Palazzo Cusani, tavoli, eventi, orari, contatti, foresteria e parcheggio.",
       },
@@ -475,7 +485,9 @@ function requestAssistantResponse(text) {
 function maybeSendGreeting() {
   if (greetingSent || !isActive || !eventsChannel || eventsChannel.readyState !== "open") return;
   greetingSent = true;
-  requestAssistantPrompt("Di solo questa frase: 'Sono Adriana di Palazzo Cusani. Mi dica pure.' Poi fermati e ascolta.", "greeting");
+  namePrompted = true;
+  awaitingNameAnswer = true;
+  requestAssistantPrompt("Di solo questa frase: 'Sono Adriana di Palazzo Cusani. A nome di chi parlo?' Poi fermati e ascolta.", "greeting");
   scheduleIdlePrompt();
 }
 
@@ -493,9 +505,19 @@ function handleRealtimeEvent(message) {
   if (!eventHasFinalUserTranscript(event)) return;
 
   const text = getEventText(event);
-  if (!textLooksMeaningful(text)) return;
+  if (!textLooksMeaningful(text)) {
+    maybeAskToRepeat(text);
+    return;
+  }
 
   clearTimeout(idleTimer);
+
+  if (textLooksLikePresenceCheck(text)) {
+    resetSilenceTimer();
+    requestAssistantPrompt("Di solo questa frase: 'Si, ci sono.' Poi fermati e ascolta.", "presence");
+    return;
+  }
+
   rememberUserText(text);
 
   if (textLooksLikeEmailRequest(text)) showGeneralEmail();
@@ -572,6 +594,7 @@ function rememberUserText(text) {
   notes.push(cleaned);
   resetSilenceTimer();
   updateLeadFromText(cleaned);
+  if (shouldOfferWhatsAppForInfo(cleaned)) whatsappForcedVisible = true;
   updateContactButtons();
 }
 
@@ -582,7 +605,7 @@ function updateLeadFromText(text) {
     lead.intent = "evento";
   } else if (textLooksLikeBookingRequest(text)) {
     lead.intent = "prenotazione";
-  } else if (!lead.intent && normalized.length > 8) {
+  } else if (!lead.intent && normalized.length > 8 && !looksLikeNameAnswer(text) && !textLooksLikeGreetingOnly(text) && !textLooksLikeCapabilityQuestion(text)) {
     lead.intent = "informazioni";
   }
 
@@ -595,8 +618,16 @@ function updateLeadFromText(text) {
   const explicitName = getExplicitName(text);
   if (explicitName) {
     lead.name = explicitName;
+    awaitingNameAnswer = false;
+  } else if (!lead.name && awaitingNameAnswer && looksLikeNameAnswer(text) && !textLooksLikeAdditionalNote(text)) {
+    lead.name = cleanCapturedValue(text);
+    awaitingNameAnswer = false;
   } else if (!lead.name && lead.intent && looksLikeNameAnswer(text) && !textLooksLikeAdditionalNote(text)) {
     lead.name = cleanCapturedValue(text);
+  }
+
+  if (awaitingNameAnswer && !looksLikeNameAnswer(text)) {
+    awaitingNameAnswer = false;
   }
 
   const people = getPeopleFromText(text);
@@ -618,7 +649,7 @@ function updateLeadFromText(text) {
 
 function getExplicitName(text) {
   const patterns = [
-    /\b(?:mi chiamo|io sono|a nome di)\s+([a-zA-ZÀ-ÿ' ]{2,50})/i,
+    /\b(?:mi chiamo|io sono|sono|a nome di)\s+([a-zA-ZÀ-ÿ' ]{2,50})/i,
     /\b(?:il mio nome e|il mio nome è|nome e|nome è)\s+([a-zA-ZÀ-ÿ' ]{2,50})/i,
   ];
 
@@ -753,7 +784,18 @@ function looksLikeNameAnswer(text) {
     "prenot", "tavolo", "evento", "mail", "email", "whatsapp", "telefono", "domani", "oggi",
     "pranzo", "cena", "persone", "numero", "anche", "bambin", "bimb", "adult", "allerg",
     "seggiolone", "passeggino", "adriana", "palazzo", "cusani", "perfetto", "certamente",
+    "interessato", "interessata", "informazioni", "parcheggio", "foresteria", "camera",
   ].some((word) => normalized.includes(word));
+}
+
+function maybeAskToRepeat(text) {
+  const cleaned = cleanText(text).toLowerCase();
+  if (!cleaned || containsUnsupportedScript(cleaned)) return;
+  if (/\b(sono adriana|adriana di palazzo cusani|mi dica pure|a nome di chi parlo|pronto c'e ancora|pronto c'è ancora)\b/i.test(cleaned)) return;
+  if (Date.now() - lastClarificationAt < 12000) return;
+
+  lastClarificationAt = Date.now();
+  requestAssistantPrompt("Di solo questa frase: 'Non ho sentito bene, puo ripetere?' Poi fermati e ascolta.", "clarify");
 }
 
 function textLooksMeaningful(text) {
@@ -762,10 +804,23 @@ function textLooksMeaningful(text) {
   if (containsUnsupportedScript(cleaned)) return false;
   if (!/[a-zA-ZÀ-ÿ0-9]/.test(cleaned)) return false;
   if (/^(eh|e|uh|um|mmm|mh|ah|oh)$/i.test(cleaned)) return false;
-  if (/^(ciao|salve|buonasera|buongiorno|buongiorno adriana|ciao adriana)$/i.test(cleaned)) return true;
+  if (textLooksLikeGreetingOnly(cleaned)) return true;
+  if (textLooksLikePresenceCheck(cleaned)) return true;
   if (/\b(silenzio|rumore|rumori|musica|sottofondo|incomprensibile|inaudible|noise)\b/i.test(cleaned)) return false;
   if (/\b(sono adriana|adriana di palazzo cusani|mi dica pure|pronto c'e ancora|pronto c'è ancora)\b/i.test(cleaned)) return false;
   return true;
+}
+
+function textLooksLikeGreetingOnly(text) {
+  return /^(ciao|salve|buonasera|buongiorno|buongiorno adriana|ciao adriana)$/i.test(cleanText(text));
+}
+
+function textLooksLikePresenceCheck(text) {
+  return /^(pronto|pronto\?|ci sei|ci siete|mi senti|mi sente|adriana ci sei|adriana mi senti)\??$/i.test(cleanText(text).toLowerCase());
+}
+
+function textLooksLikeCapabilityQuestion(text) {
+  return /\b(di cosa ti occupi|cosa fai|cosa puoi fare|come funziona|chi sei)\b/i.test(cleanText(text).toLowerCase());
 }
 
 function containsUnsupportedScript(text) {
@@ -825,7 +880,7 @@ function hasCommercialIntent() {
 }
 
 function canShowContactButtons() {
-  return whatsappForcedVisible || hasCommercialIntent() || getUsefulNotes().join(" ").toLowerCase().includes("whatsapp");
+  return whatsappForcedVisible || hasCommercialIntent() || Boolean(getInformationRequestText()) || getUsefulNotes().join(" ").toLowerCase().includes("whatsapp");
 }
 
 function updateContactButtons() {
@@ -890,6 +945,15 @@ function getContactRequestBody() {
 function getWhatsappSummary() {
   const requestLabel = lead.intent === "evento" ? "evento / ricorrenza" : lead.intent === "prenotazione" ? "prenotazione tavolo" : "richiesta informazioni";
   const customerNotes = getCustomerNotes();
+  const informationRequest = getInformationRequestText();
+
+  if (lead.intent === "informazioni" || informationRequest) {
+    return [
+      "Richiesta: richiesta informazioni",
+      lead.name ? `Nome: ${lead.name}` : "",
+      informationRequest ? `Informazione richiesta: ${informationRequest}` : "",
+    ].filter(Boolean).join("\n");
+  }
 
   return [
     `Richiesta: ${requestLabel}`,
@@ -905,6 +969,8 @@ function getWhatsappSummary() {
 }
 
 function getMissingFields() {
+  if (lead.intent !== "prenotazione" && lead.intent !== "evento") return "";
+
   const missing = [];
   if (!lead.name) missing.push("nome");
   if (!lead.day) missing.push("data/giorno");
@@ -913,6 +979,24 @@ function getMissingFields() {
   if (!lead.people) missing.push("numero persone");
   if (lead.intent === "evento" && !lead.occasion) missing.push("tipo occasione");
   return missing.length ? `Da confermare: ${missing.join(", ")}` : "";
+}
+
+function shouldOfferWhatsAppForInfo(text) {
+  if (hasCommercialIntent()) return false;
+  if (textLooksLikeGreetingOnly(text) || textLooksLikePresenceCheck(text) || textLooksLikeCapabilityQuestion(text)) return false;
+  return lead.intent === "informazioni" && Boolean(getInformationRequestText());
+}
+
+function getInformationRequestText() {
+  const informationNotes = getUsefulNotes().filter((note) => {
+    if (textLooksLikeGreetingOnly(note) || textLooksLikePresenceCheck(note) || textLooksLikeCapabilityQuestion(note)) return false;
+    if (textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note)) return false;
+    if (textLooksLikeAdditionalNote(note)) return false;
+    if (lead.name && cleanText(note).toLowerCase() === lead.name.toLowerCase()) return false;
+    return cleanText(note).length > 3;
+  });
+
+  return [...new Set(informationNotes.map(cleanText))].join("; ");
 }
 
 function getInternalSummary() {
