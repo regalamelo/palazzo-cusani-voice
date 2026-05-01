@@ -947,7 +947,7 @@ function getWhatsappSummary() {
   const customerNotes = getCustomerNotes();
   const informationRequest = getInformationRequestText();
 
-  if (lead.intent === "informazioni" || informationRequest) {
+  if (lead.intent !== "prenotazione" && lead.intent !== "evento" && informationRequest) {
     return [
       "Richiesta: richiesta informazioni",
       lead.name ? `Nome: ${lead.name}` : "",
