@@ -5,14 +5,11 @@ let eventsChannel;
 let silenceTimer;
 let idleTimer;
 let responseResetTimer;
-let ambienceAudio;
-let ambienceFadeTimer;
 let isConnecting = false;
 let isActive = false;
 let privacyAccepted = false;
 let greetingSent = false;
 let idlePromptSent = false;
-let namePrompted = false;
 let awaitingNameAnswer = false;
 let responseInProgress = false;
 let transcriptSent = false;
@@ -25,16 +22,12 @@ const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
 const PARKING_EMAIL = "segreteriacircolo@cmemi.esercito.difesa.it";
 const AMBIENCE_ENABLED = false;
-const AMBIENCE_PREVIEW_VOLUME = 0.22;
-const AMBIENCE_CALL_VOLUME = 0.07;
-const AMBIENCE_DUCK_VOLUME = 0.025;
 
 const SCRIPT_URL = document.currentScript?.src || window.location.href;
 const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
 const LEAD_URL = new URL("api/lead", BASE_URL).toString();
 const BUTTON_IMAGE_URL = new URL("adriana-voice2.gif?v=3", BASE_URL).toString();
-const AMBIENCE_AUDIO_URL = new URL("restaurant-ambience.mp3?v=1", BASE_URL).toString();
 
 const notes = [];
 const lead = {
@@ -142,7 +135,7 @@ style.innerHTML = `
     height: min(420px, calc(100vw - 24px));
     transform: translateX(-50%);
     background-size: contain;
-    background-position: 50% 50%;
+    background-position: center;
     background-repeat: no-repeat;
   }
 
@@ -199,9 +192,7 @@ style.innerHTML = `
     align-items: flex-start;
   }
 
-  .pc-voice-privacy-check {
-    margin-top: 2px;
-  }
+  .pc-voice-privacy-check { margin-top: 2px; }
 
   .pc-voice-privacy-start {
     width: 100%;
@@ -273,81 +264,10 @@ function hideActions() {
   defenseEmail.style.display = "none";
 }
 
-function startAmbience(volume = AMBIENCE_PREVIEW_VOLUME) {
-  if (!AMBIENCE_ENABLED) return;
-
-  if (ambienceAudio) {
-    ambienceAudio.play().catch(() => {});
-    fadeAmbience(volume, 0.25);
-    return;
-  }
-
-  ambienceAudio = new Audio(AMBIENCE_AUDIO_URL);
-  ambienceAudio.loop = true;
-  ambienceAudio.preload = "auto";
-  ambienceAudio.volume = 0;
-  ambienceAudio.play().then(() => fadeAmbience(volume, 0.8)).catch(() => {
-    ambienceAudio = null;
-  });
-}
-
-function fadeAmbience(volume, seconds = 0.25) {
-  if (!ambienceAudio) return;
-  if (ambienceFadeTimer) clearInterval(ambienceFadeTimer);
-
-  const from = ambienceAudio.volume;
-  const to = Math.max(0, Math.min(1, volume));
-  const start = performance.now();
-  const duration = Math.max(80, seconds * 1000);
-
-  ambienceFadeTimer = setInterval(() => {
-    if (!ambienceAudio) {
-      clearInterval(ambienceFadeTimer);
-      ambienceFadeTimer = null;
-      return;
-    }
-
-    const progress = Math.min(1, (performance.now() - start) / duration);
-    ambienceAudio.volume = from + (to - from) * progress;
-
-    if (progress >= 1) {
-      clearInterval(ambienceFadeTimer);
-      ambienceFadeTimer = null;
-    }
-  }, 40);
-}
-
-function duckAmbience() {
-  fadeAmbience(AMBIENCE_DUCK_VOLUME, 0.12);
-}
-
-function restoreAmbience() {
-  if (isActive) fadeAmbience(AMBIENCE_CALL_VOLUME, 0.45);
-}
-
-function stopAmbience() {
-  if (ambienceFadeTimer) {
-    clearInterval(ambienceFadeTimer);
-    ambienceFadeTimer = null;
-  }
-
-  if (!ambienceAudio) return;
-
-  try {
-    ambienceAudio.pause();
-    ambienceAudio.currentTime = 0;
-    ambienceAudio.removeAttribute("src");
-    ambienceAudio.load();
-  } catch {}
-
-  ambienceAudio = null;
-}
-
 function resetLead() {
   notes.length = 0;
   transcriptSent = false;
   whatsappForcedVisible = false;
-  namePrompted = false;
   awaitingNameAnswer = false;
   lastClarificationAt = 0;
   Object.assign(lead, {
@@ -389,7 +309,6 @@ function stopCall() {
   greetingSent = false;
   idlePromptSent = false;
   setActive(false);
-  stopAmbience();
 
   if (hasCommercialIntent()) {
     forceWhatsAppButton();
@@ -425,13 +344,13 @@ function markResponse(key) {
   responseResetTimer = setTimeout(() => {
     responseInProgress = false;
     responseResetTimer = null;
-  }, 5000);
+  }, 3500);
 }
 
 function requestAssistantPrompt(instructions, key) {
   if (!eventsChannel || eventsChannel.readyState !== "open") return false;
   if (responseInProgress) return false;
-  if (key === lastResponseKey && Date.now() - lastResponseAt < 5000) return false;
+  if (key === lastResponseKey && Date.now() - lastResponseAt < 3500) return false;
 
   markResponse(key);
 
@@ -453,8 +372,8 @@ function requestAssistantResponse(text) {
   if (!eventsChannel || eventsChannel.readyState !== "open") return;
   if (!textLooksMeaningful(key)) return;
   if (responseInProgress) return;
-  if (key === lastResponseKey && Date.now() - lastResponseAt < 5000) return;
-  if (Date.now() - lastResponseAt < 900) return;
+  if (key === lastResponseKey && Date.now() - lastResponseAt < 3500) return;
+  if (Date.now() - lastResponseAt < 500) return;
 
   markResponse(key);
 
@@ -465,15 +384,16 @@ function requestAssistantResponse(text) {
         instructions:
           `L'utente ha detto esattamente: "${key}". Rispondi solo a questa frase. ` +
           "Non assumere che voglia prenotare se non lo dice chiaramente. " +
-          "Usa solo la base conoscenza: se non sai un dettaglio, non inventarlo. " +
-          "Non inventare mai email, reparti, disponibilita, parcheggi, costi o ricevimento. " +
-          "Se chiede un'informazione che non e nella base conoscenza, di' che non hai quel dettaglio e che puo inviare quella richiesta dal bottone WhatsApp gia compilato per ricevere risposta nel piu breve tempo possibile. " +
-          "Se chiede del parcheggio, di' che e gestito dalla segreteria del circolo e che per maggiori informazioni deve mandare una mail alla segreteria del circolo. " +
-          "Se l'utente dice 'pronto', 'ci sei' o 'mi senti', rispondi solo: 'Si, ci sono.' " +
-          "Se l'utente ha appena detto solo il nome, rispondi solo: 'Mi dica pure.' " +
+          "Se dice prenotare o prenotazione senza dire foresteria, camere, alloggio o pernottamento, considera sempre tavolo o evento. " +
+          "Non nominare la segreteria del circolo per prenotazioni tavolo, pranzo, cena o eventi. " +
+          "La mail della segreteria del circolo vale solo per parcheggio o foresteria/camere/alloggio/pernottamento. " +
+          "Usa solo la base conoscenza: non inventare email, reparti, disponibilita, parcheggi, costi o ricevimento. " +
+          "Se non sai un dettaglio, di' che non lo hai qui e che puo inviare la richiesta dal bottone WhatsApp gia compilato. " +
+          "Se chiede parcheggio, di' solo che e gestito dalla segreteria del circolo e che deve mandare una mail alla segreteria. " +
+          "Se dice 'pronto', 'ci sei' o 'mi senti', rispondi solo: 'Si, ci sono.' " +
+          "Se ha appena detto solo il nome, rispondi solo: 'Mi dica pure.' " +
           "Se non hai sentito o la frase e poco chiara, rispondi solo: 'Non ho sentito bene, puo ripetere?' " +
-          "Se saluta soltanto, rispondi solo: 'Mi dica pure.' " +
-          "Se chiede di cosa ti occupi o cosa puoi fare, spiega in una frase che aiuti con informazioni su Palazzo Cusani, tavoli, eventi, orari, contatti, foresteria e parcheggio.",
+          "Se saluta soltanto, rispondi solo: 'Mi dica pure.'",
       },
     }));
   } catch (error) {
@@ -485,9 +405,8 @@ function requestAssistantResponse(text) {
 function maybeSendGreeting() {
   if (greetingSent || !isActive || !eventsChannel || eventsChannel.readyState !== "open") return;
   greetingSent = true;
-  namePrompted = true;
   awaitingNameAnswer = true;
-  requestAssistantPrompt("Di solo questa frase: 'Sono Adriana di Palazzo Cusani. A nome di chi parlo?' Poi fermati e ascolta.", "greeting");
+  requestAssistantPrompt("Di solo questa frase: 'Sono Adriana di Palazzo Cusani. Come posso chiamarla?' Poi fermati e ascolta.", "greeting");
   scheduleIdlePrompt();
 }
 
@@ -501,7 +420,6 @@ function handleRealtimeEvent(message) {
   }
 
   handleAssistantLifecycle(event);
-
   if (!eventHasFinalUserTranscript(event)) return;
 
   const text = getEventText(event);
@@ -529,24 +447,13 @@ function handleRealtimeEvent(message) {
 
 function handleAssistantLifecycle(event) {
   const type = event?.type || "";
-
-  if (
-    type.includes("response.audio.delta") ||
-    type.includes("output_audio_buffer.started") ||
-    type.includes("input_audio_buffer.speech_started")
-  ) {
-    duckAmbience();
-  }
-
   if (
     type.includes("response.done") ||
     type.includes("response.audio.done") ||
-    type.includes("output_audio_buffer.stopped") ||
-    type.includes("input_audio_buffer.speech_stopped")
+    type.includes("output_audio_buffer.stopped")
   ) {
     responseInProgress = false;
     clearTimeout(responseResetTimer);
-    restoreAmbience();
   }
 }
 
@@ -566,25 +473,25 @@ function getEventText(event) {
     event?.item?.formatted?.transcript,
   ];
 
-  function collectContent(value) {
-    if (!value) return;
-    if (typeof value === "string") {
-      parts.push(value);
-      return;
-    }
-    if (Array.isArray(value)) {
-      value.forEach(collectContent);
-      return;
-    }
-    if (typeof value === "object") {
-      collectContent(value.transcript);
-      collectContent(value.text);
-    }
-  }
-
-  collectContent(event?.content);
-  collectContent(event?.item?.content);
+  collectContent(event?.content, parts);
+  collectContent(event?.item?.content, parts);
   return cleanText(parts.join(" "));
+}
+
+function collectContent(value, parts) {
+  if (!value) return;
+  if (typeof value === "string") {
+    parts.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectContent(item, parts));
+    return;
+  }
+  if (typeof value === "object") {
+    collectContent(value.transcript, parts);
+    collectContent(value.text, parts);
+  }
 }
 
 function rememberUserText(text) {
@@ -600,12 +507,18 @@ function rememberUserText(text) {
 
 function updateLeadFromText(text) {
   const normalized = text.toLowerCase();
+  const foresteria = textLooksLikeForesteriaRequest(text);
+  const parking = textLooksLikeParkingRequest(text);
 
-  if (textLooksLikeEventRequest(text) && !normalized.includes("tavolo")) {
+  if (foresteria) {
+    lead.intent = "foresteria";
+  } else if (parking && !lead.intent) {
+    lead.intent = "informazioni";
+  } else if (textLooksLikeEventRequest(text) && !normalized.includes("tavolo")) {
     lead.intent = "evento";
   } else if (textLooksLikeBookingRequest(text)) {
     lead.intent = "prenotazione";
-  } else if (!lead.intent && normalized.length > 8 && !looksLikeNameAnswer(text) && !textLooksLikeGreetingOnly(text) && !textLooksLikeCapabilityQuestion(text)) {
+  } else if (!lead.intent && normalized.length > 8 && !looksLikeNameAnswer(text) && !textLooksLikeCapabilityQuestion(text)) {
     lead.intent = "informazioni";
   }
 
@@ -626,9 +539,7 @@ function updateLeadFromText(text) {
     lead.name = cleanCapturedValue(text);
   }
 
-  if (awaitingNameAnswer && !looksLikeNameAnswer(text)) {
-    awaitingNameAnswer = false;
-  }
+  if (awaitingNameAnswer && !looksLikeNameAnswer(text)) awaitingNameAnswer = false;
 
   const people = getPeopleFromText(text);
   if (people) lead.people = people;
@@ -668,7 +579,6 @@ function getPeopleFromText(text) {
   const numeric =
     text.match(/\b(\d{1,3})\s*(?:persone|ospiti|coperti|invitati|partecipanti|commensali)\b/i) ||
     text.match(/\b(?:per|siamo|saremo|in|circa)\s+(\d{1,3})\b/i);
-
   if (numeric) return numeric[1];
   if (/^\d{1,3}$/.test(trimmed) && lead.intent) return trimmed;
 
@@ -683,26 +593,18 @@ function getPeopleFromText(text) {
   const match =
     text.toLowerCase().match(new RegExp(`\\b(${wordList})\\s+(?:persone|ospiti|coperti|invitati|partecipanti|commensali)\\b`, "i")) ||
     text.toLowerCase().match(new RegExp(`\\b(?:per|siamo|saremo|in)\\s+(${wordList})\\b`, "i"));
-
   return match ? String(words[match[1].toLowerCase()]) : "";
 }
 
 function getTimeFromText(text) {
   const normalized = text.toLowerCase();
   const numeric = text.match(/\b(?:alle|ore)?\s*([01]?\d|2[0-3])[:., ]?([0-5]\d)?\b/i);
-
   if (!numeric || !/\b(alle|ore|orario|pranzo|cena|sera|stasera)\b/i.test(text)) return "";
 
   let hour = Number(numeric[1]);
   const minutes = numeric[2] || "00";
-
-  if ((lead.meal === "cena" || /\b(cena|sera|stasera)\b/i.test(normalized)) && hour >= 1 && hour <= 11) {
-    hour += 12;
-  }
-  if ((lead.meal === "pranzo" || /\bpranzo\b/i.test(normalized)) && hour >= 1 && hour <= 4) {
-    hour += 12;
-  }
-
+  if ((lead.meal === "cena" || /\b(cena|sera|stasera)\b/i.test(normalized)) && hour >= 1 && hour <= 11) hour += 12;
+  if ((lead.meal === "pranzo" || /\bpranzo\b/i.test(normalized)) && hour >= 1 && hour <= 4) hour += 12;
   return `${String(hour).padStart(2, "0")}:${minutes}`;
 }
 
@@ -724,13 +626,8 @@ function getDateFromText(text) {
 
 function expandDate(value) {
   const cleaned = cleanText(value);
-  const normalized = cleaned.toLowerCase()
-    .replace(/[ìí]/g, "i")
-    .replace(/[èé]/g, "e");
-
-  if (normalized === "oggi" || normalized === "stasera" || normalized === "questa sera") {
-    return `${cleaned} ${formatDate(addDays(new Date(), 0))}`;
-  }
+  const normalized = cleaned.toLowerCase().replace(/[ìí]/g, "i").replace(/[èé]/g, "e");
+  if (normalized === "oggi" || normalized === "stasera" || normalized === "questa sera") return `${cleaned} ${formatDate(addDays(new Date(), 0))}`;
   if (normalized === "domani") return `${cleaned} ${formatDate(addDays(new Date(), 1))}`;
   if (normalized === "dopodomani") return `${cleaned} ${formatDate(addDays(new Date(), 2))}`;
 
@@ -784,16 +681,14 @@ function looksLikeNameAnswer(text) {
     "prenot", "tavolo", "evento", "mail", "email", "whatsapp", "telefono", "domani", "oggi",
     "pranzo", "cena", "persone", "numero", "anche", "bambin", "bimb", "adult", "allerg",
     "seggiolone", "passeggino", "adriana", "palazzo", "cusani", "perfetto", "certamente",
-    "interessato", "interessata", "informazioni", "parcheggio", "foresteria", "camera",
+    "informazioni", "parcheggio", "foresteria", "camera",
   ].some((word) => normalized.includes(word));
 }
 
 function maybeAskToRepeat(text) {
   const cleaned = cleanText(text).toLowerCase();
   if (!cleaned || containsUnsupportedScript(cleaned)) return;
-  if (/\b(sono adriana|adriana di palazzo cusani|mi dica pure|a nome di chi parlo|pronto c'e ancora|pronto c'è ancora)\b/i.test(cleaned)) return;
   if (Date.now() - lastClarificationAt < 12000) return;
-
   lastClarificationAt = Date.now();
   requestAssistantPrompt("Di solo questa frase: 'Non ho sentito bene, puo ripetere?' Poi fermati e ascolta.", "clarify");
 }
@@ -804,8 +699,6 @@ function textLooksMeaningful(text) {
   if (containsUnsupportedScript(cleaned)) return false;
   if (!/[a-zA-ZÀ-ÿ0-9]/.test(cleaned)) return false;
   if (/^(eh|e|uh|um|mmm|mh|ah|oh)$/i.test(cleaned)) return false;
-  if (textLooksLikeGreetingOnly(cleaned)) return true;
-  if (textLooksLikePresenceCheck(cleaned)) return true;
   if (/\b(silenzio|rumore|rumori|musica|sottofondo|incomprensibile|inaudible|noise)\b/i.test(cleaned)) return false;
   if (/\b(sono adriana|adriana di palazzo cusani|mi dica pure|pronto c'e ancora|pronto c'è ancora)\b/i.test(cleaned)) return false;
   return true;
@@ -848,6 +741,7 @@ function getGenericEventOccasion(text) {
 
 function textLooksLikeBookingRequest(text) {
   const normalized = text.toLowerCase();
+  if (textLooksLikeForesteriaRequest(text) || textLooksLikeParkingRequest(text)) return false;
   return ["prenot", "riserv", "tavolo", "disponibil", "vorrei venire", "posso venire", "posto"].some((word) => normalized.includes(word));
 }
 
@@ -879,7 +773,7 @@ function hasCommercialIntent() {
   return lead.intent === "prenotazione" || lead.intent === "evento" || getUsefulNotes().some((note) => textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note));
 }
 
-function canShowContactButtons() {
+function canShowWhatsApp() {
   return whatsappForcedVisible || hasCommercialIntent() || Boolean(getInformationRequestText()) || getUsefulNotes().join(" ").toLowerCase().includes("whatsapp");
 }
 
@@ -895,11 +789,10 @@ function forceWhatsAppButton() {
 }
 
 function updateWhatsAppButton() {
-  if (!canShowContactButtons()) {
+  if (!canShowWhatsApp()) {
     whatsapp.style.display = "none";
     return;
   }
-
   whatsapp.href = buildWhatsAppUrl();
   whatsapp.innerText = "Invia richiesta su WhatsApp";
   whatsapp.style.display = "block";
@@ -923,7 +816,7 @@ function showDefenseEmail(topic = "Palazzo Cusani") {
 
 function openWhatsAppWithLatestMessage(event) {
   event.preventDefault();
-  if (!canShowContactButtons() && !hasCommercialIntent()) return;
+  if (!canShowWhatsApp()) return;
   window.open(buildWhatsAppUrl(), "_blank", "noopener");
 }
 
@@ -933,7 +826,6 @@ function buildWhatsAppUrl() {
 
 function getContactRequestBody() {
   getUsefulNotes().forEach(updateLeadFromText);
-
   return [
     "Buongiorno,",
     getWhatsappSummary(),
@@ -951,7 +843,7 @@ function getWhatsappSummary() {
     return [
       "Richiesta: richiesta informazioni",
       lead.name ? `Nome: ${lead.name}` : "",
-      informationRequest ? `Informazione richiesta: ${informationRequest}` : "",
+      `Informazione richiesta: ${informationRequest}`,
     ].filter(Boolean).join("\n");
   }
 
@@ -970,7 +862,6 @@ function getWhatsappSummary() {
 
 function getMissingFields() {
   if (lead.intent !== "prenotazione" && lead.intent !== "evento") return "";
-
   const missing = [];
   if (!lead.name) missing.push("nome");
   if (!lead.day) missing.push("data/giorno");
@@ -983,6 +874,7 @@ function getMissingFields() {
 
 function shouldOfferWhatsAppForInfo(text) {
   if (hasCommercialIntent()) return false;
+  if (textLooksLikeForesteriaRequest(text) || textLooksLikeParkingRequest(text)) return false;
   if (textLooksLikeGreetingOnly(text) || textLooksLikePresenceCheck(text) || textLooksLikeCapabilityQuestion(text)) return false;
   return lead.intent === "informazioni" && Boolean(getInformationRequestText());
 }
@@ -990,18 +882,17 @@ function shouldOfferWhatsAppForInfo(text) {
 function getInformationRequestText() {
   const informationNotes = getUsefulNotes().filter((note) => {
     if (textLooksLikeGreetingOnly(note) || textLooksLikePresenceCheck(note) || textLooksLikeCapabilityQuestion(note)) return false;
+    if (textLooksLikeForesteriaRequest(note) || textLooksLikeParkingRequest(note)) return false;
     if (textLooksLikeBookingRequest(note) || textLooksLikeEventRequest(note)) return false;
     if (textLooksLikeAdditionalNote(note)) return false;
     if (lead.name && cleanText(note).toLowerCase() === lead.name.toLowerCase()) return false;
     return cleanText(note).length > 3;
   });
-
   return [...new Set(informationNotes.map(cleanText))].join("; ");
 }
 
 function getInternalSummary() {
   const usefulNotes = getUsefulNotes();
-
   return [
     "Nuova richiesta dal voice agent Palazzo Cusani",
     "",
@@ -1023,7 +914,6 @@ function getInternalSummary() {
 async function sendCallTranscript() {
   if (transcriptSent || !getUsefulNotes().length) return;
   transcriptSent = true;
-
   try {
     await fetch(LEAD_URL, {
       method: "POST",
@@ -1040,19 +930,13 @@ function getCallStartErrorMessage(error) {
   const name = error?.name || "";
   const message = error?.message || "";
   const lowerMessage = message.toLowerCase();
-
   if (name === "NotAllowedError" || name === "SecurityError") {
     return 'Microfono non accessibile. Consenti il microfono nel browser. Se il widget e dentro un iframe, serve allow="microphone".';
   }
-
-  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-    return "Nessun microfono trovato su questo dispositivo.";
-  }
-
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") return "Nessun microfono trovato su questo dispositivo.";
   if (lowerMessage.includes("permission") || lowerMessage.includes("microphone")) {
     return 'Microfono non accessibile. Controlla i permessi del browser e, se il widget e dentro un iframe, serve allow="microphone".';
   }
-
   return "Errore: " + (message || "impossibile avviare l'assistente");
 }
 
@@ -1061,7 +945,6 @@ privacyStart.onclick = () => {
     alert("Per iniziare deve accettare privacy e dichiarazione di eta.");
     return;
   }
-
   privacyAccepted = true;
   privacyBox.style.display = "none";
   btn.click();
@@ -1080,7 +963,6 @@ btn.onclick = async () => {
 
   if (!privacyAccepted) {
     hideStatus();
-    startAmbience(AMBIENCE_PREVIEW_VOLUME);
     privacyBox.style.display = "block";
     return;
   }
@@ -1088,13 +970,11 @@ btn.onclick = async () => {
   try {
     isConnecting = true;
     resetLead();
-    startAmbience(AMBIENCE_CALL_VOLUME);
     widget.classList.add("is-active");
     showStatus("Richiesta microfono...");
 
     const tokenRes = await fetch(SESSION_URL, { method: "POST" });
     const data = await tokenRes.json();
-
     if (!tokenRes.ok) throw new Error(data.error || "Errore nella creazione della sessione");
 
     const clientSecret = data.value || data.client_secret?.value;
@@ -1104,7 +984,6 @@ btn.onclick = async () => {
     outputAudio = document.createElement("audio");
     outputAudio.autoplay = true;
     outputAudio.playsInline = true;
-    outputAudio.volume = 1;
     document.body.appendChild(outputAudio);
 
     pc.ontrack = (event) => {
@@ -1117,14 +996,13 @@ btn.onclick = async () => {
         setActive(true);
         hideStatus();
         resetSilenceTimer();
-        setTimeout(maybeSendGreeting, 600);
+        setTimeout(maybeSendGreeting, 350);
       }
-
       if (["failed", "disconnected", "closed"].includes(pc?.connectionState)) stopCall();
     };
 
     eventsChannel = pc.createDataChannel("oai-events");
-    eventsChannel.addEventListener("open", () => setTimeout(maybeSendGreeting, 600));
+    eventsChannel.addEventListener("open", () => setTimeout(maybeSendGreeting, 350));
     eventsChannel.addEventListener("message", handleRealtimeEvent);
 
     stream = await navigator.mediaDevices.getUserMedia({
@@ -1139,7 +1017,6 @@ btn.onclick = async () => {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-
     showStatus("Connessione...");
 
     const sdpRes = await fetch("https://api.openai.com/v1/realtime/calls", {
@@ -1150,15 +1027,13 @@ btn.onclick = async () => {
       },
       body: offer.sdp,
     });
-
     if (!sdpRes.ok) throw new Error(await sdpRes.text());
 
     const answer = await sdpRes.text();
     await pc.setRemoteDescription({ type: "answer", sdp: answer });
   } catch (error) {
-    const message = getCallStartErrorMessage(error);
     console.error(error);
-    alert(message);
+    alert(getCallStartErrorMessage(error));
     stopCall();
   }
 };
