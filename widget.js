@@ -1,6 +1,7 @@
 let pc;
 let stream;
 let outputAudio;
+let ambienceAudio;
 let eventsChannel;
 let silenceTimer;
 let idleTimer;
@@ -21,13 +22,15 @@ let lastClarificationAt = 0;
 const PALAZZO_WHATSAPP = "393336523536";
 const GENERAL_EMAIL = "palazzocusani@allegroitalia.it";
 const PARKING_EMAIL = "segreteriacircolo@cmemi.esercito.difesa.it";
-const AMBIENCE_ENABLED = false;
+const AMBIENCE_ENABLED = true;
+const AMBIENCE_VOLUME = 0.16;
 
 const SCRIPT_URL = document.currentScript?.src || window.location.href;
 const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
 const LEAD_URL = new URL("api/lead", BASE_URL).toString();
 const BUTTON_IMAGE_URL = new URL("adriana-voice2.gif?v=3", BASE_URL).toString();
+const AMBIENCE_AUDIO_URL = new URL("restaurant-ambience.mp3?v=2", BASE_URL).toString();
 
 const notes = [];
 const lead = {
@@ -264,6 +267,50 @@ function hideActions() {
   defenseEmail.style.display = "none";
 }
 
+function ensureAmbienceAudio() {
+  if (!AMBIENCE_ENABLED) return null;
+  if (ambienceAudio) return ambienceAudio;
+
+  ambienceAudio = document.createElement("audio");
+  ambienceAudio.src = AMBIENCE_AUDIO_URL;
+  ambienceAudio.loop = true;
+  ambienceAudio.preload = "auto";
+  ambienceAudio.playsInline = true;
+  ambienceAudio.volume = AMBIENCE_VOLUME;
+  ambienceAudio.setAttribute("aria-hidden", "true");
+  ambienceAudio.addEventListener(
+    "error",
+    () => console.warn("Restaurant ambience audio not loaded", AMBIENCE_AUDIO_URL),
+    { once: true }
+  );
+  document.body.appendChild(ambienceAudio);
+
+  return ambienceAudio;
+}
+
+function startAmbience() {
+  const audio = ensureAmbienceAudio();
+  if (!audio) return;
+
+  audio.volume = AMBIENCE_VOLUME;
+
+  const playPromise = audio.play();
+  if (playPromise?.catch) {
+    playPromise.catch((error) => {
+      console.warn("Restaurant ambience audio not started", error);
+    });
+  }
+}
+
+function stopAmbience() {
+  if (!ambienceAudio) return;
+
+  ambienceAudio.pause();
+  ambienceAudio.currentTime = 0;
+  ambienceAudio.remove();
+  ambienceAudio = null;
+}
+
 function resetLead() {
   notes.length = 0;
   transcriptSent = false;
@@ -301,6 +348,7 @@ function stopCall() {
   pc?.close();
   stream?.getTracks().forEach((track) => track.stop());
   outputAudio?.remove();
+  stopAmbience();
   pc = null;
   stream = null;
   outputAudio = null;
@@ -972,6 +1020,7 @@ btn.onclick = async () => {
     resetLead();
     widget.classList.add("is-active");
     showStatus("Richiesta microfono...");
+    startAmbience();
 
     const tokenRes = await fetch(SESSION_URL, { method: "POST" });
     const data = await tokenRes.json();
