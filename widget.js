@@ -30,7 +30,7 @@ const BASE_URL = new URL("./", SCRIPT_URL);
 const SESSION_URL = new URL("api/session", BASE_URL).toString();
 const LEAD_URL = new URL("api/lead", BASE_URL).toString();
 const BUTTON_IMAGE_URL = new URL("adriana-voice2.gif?v=3", BASE_URL).toString();
-const AMBIENCE_AUDIO_URL = new URL("restaurant-ambience.mp3?v=2", BASE_URL).toString();
+const AMBIENCE_AUDIO_URL = new URL("restaurant-ambience.mp3?v=3", BASE_URL).toString();
 
 const notes = [];
 const lead = {
@@ -995,6 +995,7 @@ privacyStart.onclick = () => {
   }
   privacyAccepted = true;
   privacyBox.style.display = "none";
+  startAmbience();
   btn.click();
 };
 
