@@ -454,7 +454,7 @@ function maybeSendGreeting() {
   if (greetingSent || !isActive || !eventsChannel || eventsChannel.readyState !== "open") return;
   greetingSent = true;
   awaitingNameAnswer = true;
-  requestAssistantPrompt("Di solo questa frase: 'Sono Adriana di Palazzo Cusani. Come posso chiamarla?' Poi fermati e ascolta.", "greeting");
+  requestAssistantPrompt("Di solo questa frase: 'Palazzo Cusani, sono Adriana. Con chi parlo?' Poi fermati e ascolta.", "greeting");
   scheduleIdlePrompt();
 }
 
